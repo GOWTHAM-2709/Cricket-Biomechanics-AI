@@ -1,0 +1,93 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Cricket AI Analysis — Docker Compose (production-ready, resource-bounded)
+# ═══════════════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── Python AI Microservice ────────────────────────────────────────────────
+  python-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    image: cricket-ai:latest
+    container_name: python-ai
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads_data:/tmp/uploads
+    networks:
+      - cricket-net
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - TF_CPP_MIN_LOG_LEVEL=3
+      - GLOG_minloglevel=3
+      - PYTHONWARNINGS=ignore
+    # Resource limits prevent the AI container from consuming all RAM/CPU
+    # and freezing Docker Desktop on a laptop.
+    deploy:
+      resources:
+        limits:
+          memory: 3g        # MediaPipe + OpenCV peaks at ~2 GB; 3g gives headroom
+          cpus: "2.0"       # Cap at 2 logical cores — leave room for Java + host OS
+        reservations:
+          memory: 512m
+    # Health check so java-backend waits until Python is actually ready
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+
+  # ── Java Spring Boot Backend ───────────────────────────────────────────────
+  java-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cricket-backend:latest
+    container_name: java-backend
+    ports:
+      - "9090:9090"
+    volumes:
+      - uploads_data:/tmp/uploads
+    networks:
+      - cricket-net
+    environment:
+      - AI_SERVICE_URL=http://python-ai:8000
+      - UPLOAD_DIR=/tmp/uploads
+      - SPRING_SERVLET_MULTIPART_LOCATION=/tmp/uploads
+      # JVM memory: container-aware, max 512 MB
+      - JAVA_OPTS=-Xms128m -Xmx512m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "1.0"
+        reservations:
+          memory: 256m
+    # Only start java-backend once python-ai passes its health check
+    depends_on:
+      python-ai:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: unless-stopped
+
+
+# ── Shared volume ────────────────────────────────────────────────────────────
+volumes:
+  uploads_data:
+    driver: local
+
+
+# ── Internal network ─────────────────────────────────────────────────────────
+networks:
+  cricket-net:
+    driver: bridge

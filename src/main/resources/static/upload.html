@@ -1,0 +1,1741 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cricket Bowling Analyzer</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap');
+
+        :root {
+            --bg-base: #e6ecf3;
+            --shadow-light: #ffffff;
+            --shadow-dark: #c8d0e7;
+            --neu-flat: 8px 8px 16px var(--shadow-dark), -8px -8px 16px var(--shadow-light);
+            --neu-pressed: inset 6px 6px 12px var(--shadow-dark), inset -6px -6px 12px var(--shadow-light);
+            --neu-raised: 12px 12px 24px var(--shadow-dark), -12px -12px 24px var(--shadow-light);
+            --neu-sm: 4px 4px 8px var(--shadow-dark), -4px -4px 8px var(--shadow-light);
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --accent-start: #0ea5e9;
+            --accent-end: #06b6d4;
+            --danger: #ef4444;
+            --warn: #f59e0b;
+            --ok: #10b981;
+            --glass-bg: rgba(255, 255, 255, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.6);
+            --radius-lg: 24px;
+            --radius-md: 16px;
+            --radius-sm: 12px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-base);
+            padding-bottom: 60px;
+            overflow-x: hidden;
+        }
+
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            opacity: 0.6;
+            pointer-events: none;
+            z-index: 0;
+            animation: float 14s ease-in-out infinite;
+        }
+
+        .blob.a {
+            width: 400px;
+            height: 400px;
+            background: rgba(14, 165, 233, 0.2);
+            top: -100px;
+            left: -100px;
+        }
+
+        .blob.b {
+            width: 500px;
+            height: 500px;
+            background: rgba(6, 182, 212, 0.15);
+            bottom: -100px;
+            right: -150px;
+            animation-delay: 2s;
+        }
+
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translate(0, 0);
+            }
+
+            50% {
+                transform: translate(30px, -40px);
+            }
+        }
+
+        .navbar {
+            position: sticky;
+            top: 0;
+            z-index: 50;
+            backdrop-filter: blur(16px);
+            background: var(--glass-bg);
+            border-bottom: 1px solid var(--glass-border);
+            padding: 16px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.05);
+        }
+
+        .nav-logo {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, var(--accent-start), var(--accent-end));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-user {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--bg-base);
+            box-shadow: var(--neu-sm);
+            padding: 6px 16px 6px 6px;
+            border-radius: 999px;
+        }
+
+        .avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #cbd5e1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: #fff;
+            box-shadow: inset 2px 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--ok);
+            box-shadow: 0 0 10px var(--ok);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+            }
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            width: min(1200px, 92%);
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 32px;
+        }
+
+        /* TABS */
+        .tab-switcher {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+
+        .tab {
+            background: var(--bg-base);
+            border: none;
+            border-radius: 999px;
+            padding: 12px 32px;
+            font-size: 1.05rem;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            box-shadow: var(--neu-flat);
+            transition: all 0.3s ease;
+        }
+
+        .tab:hover {
+            color: var(--accent-start);
+            transform: translateY(-2px);
+            box-shadow: var(--neu-raised);
+        }
+
+        .tab.active {
+            box-shadow: var(--neu-pressed);
+            color: var(--accent-start);
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr;
+            gap: 32px;
+        }
+
+        .hero-main {
+            background: var(--bg-base);
+            border-radius: var(--radius-lg);
+            padding: 40px;
+            box-shadow: var(--neu-raised);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-main::before {
+            content: "";
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.8) 0%, transparent 60%);
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .hero-main h1 {
+            margin: 0 0 12px;
+            font-family: 'Playfair Display', serif;
+            font-size: clamp(1.8rem, 3vw, 2.5rem);
+            color: var(--text-main);
+            letter-spacing: -1px;
+        }
+
+        .hero-main p {
+            margin: 0 0 24px;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            line-height: 1.5;
+        }
+
+        .tag-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .tag {
+            background: var(--bg-base);
+            box-shadow: var(--neu-sm);
+            color: var(--accent-start);
+            padding: 8px 16px;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: transform 0.25s ease;
+        }
+
+        .tag:hover {
+            transform: translateY(-2px);
+        }
+
+        .hero-side {
+            background: var(--bg-base);
+            border-radius: var(--radius-lg);
+            padding: 32px;
+            box-shadow: var(--neu-flat);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .hero-side h3 {
+            margin: 0 0 20px;
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .mini-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            flex: 1;
+        }
+
+        .mini-box {
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: var(--radius-sm);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .mini-box b {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .mini-box span {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .panel {
+            background: var(--bg-base);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--neu-flat);
+            padding: 32px;
+        }
+
+        .panel h3 {
+            margin: 0 0 24px;
+            font-size: 1.25rem;
+            color: var(--text-main);
+            letter-spacing: -0.5px;
+        }
+
+        .guide-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+
+        .guide-card {
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: var(--radius-md);
+            padding: 24px;
+        }
+
+        .guide-card h4 {
+            margin: 0 0 16px;
+            color: var(--accent-start);
+            font-size: 1rem;
+        }
+
+        .guide-card ul {
+            margin: 0;
+            padding-left: 20px;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        .sample-box {
+            margin-top: 16px;
+            background: var(--bg-base);
+            box-shadow: var(--neu-flat);
+            border-radius: var(--radius-sm);
+            padding: 16px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .sample-box code {
+            display: inline-block;
+            margin-top: 8px;
+            padding: 4px 8px;
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: 6px;
+            color: #334155;
+            font-weight: 600;
+        }
+
+        .warn-note {
+            margin-top: 16px;
+            color: var(--warn);
+            font-weight: 600;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .upload-zone {
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: var(--radius-lg);
+            padding: 40px;
+            text-align: center;
+            border: 2px dashed rgba(14, 165, 233, 0.3);
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .upload-zone:hover {
+            border-color: var(--accent-start);
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .upload-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 24px;
+            margin-bottom: 32px;
+            text-align: left;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            position: relative;
+        }
+
+        .field label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            padding-left: 4px;
+        }
+
+        .field input[type="text"],
+        .field select,
+        .field input[type="file"],
+        .field input[type="number"] {
+            background: var(--bg-base);
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+            font-size: 0.95rem;
+            color: var(--text-main);
+            font-family: inherit;
+            box-shadow: var(--neu-pressed);
+            outline: none;
+            transition: box-shadow 0.2s ease, background 0.2s;
+        }
+
+        .field input[type="text"]:focus,
+        .field select:focus,
+        .field input[type="number"]:focus {
+            box-shadow: inset 4px 4px 8px var(--shadow-dark), inset -4px -4px 8px var(--shadow-light), 0 0 0 2px rgba(14, 165, 233, 0.2);
+        }
+
+        .field input[type="file"]::file-selector-button {
+            background: var(--bg-base);
+            box-shadow: var(--neu-flat);
+            border: none;
+            border-radius: 8px;
+            padding: 6px 12px;
+            margin-right: 16px;
+            color: var(--accent-start);
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform .1s;
+        }
+
+        .field input[type="file"]::file-selector-button:active {
+            box-shadow: var(--neu-pressed);
+        }
+
+        .checkline {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 600;
+            margin-top: 8px;
+            cursor: pointer;
+        }
+
+        .checkline input[type="checkbox"] {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: 6px;
+            outline: none;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .checkline input[type="checkbox"]:checked::after {
+            content: "\2713";
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--accent-start);
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        button.btn-primary {
+            border: none;
+            border-radius: var(--radius-sm);
+            padding: 16px 32px;
+            cursor: pointer;
+            color: #fff;
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            background: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+            box-shadow: 0 10px 20px -10px var(--accent-start), var(--neu-flat);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            width: 100%;
+            margin-top: 16px;
+        }
+
+        button.btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 25px -10px var(--accent-start), var(--neu-raised);
+        }
+
+        button.btn-primary:active {
+            transform: translateY(2px);
+            box-shadow: inset 4px 4px 10px rgba(0, 0, 0, 0.2), var(--neu-pressed);
+        }
+
+        button.btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: translateY(0);
+            box-shadow: none;
+        }
+
+        button {
+            border: none;
+            font-family: inherit;
+        }
+
+        .btn-secondary {
+            background: var(--bg-base);
+            color: var(--text-main);
+            box-shadow: var(--neu-flat);
+            padding: 16px 32px;
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 16px;
+        }
+
+        .btn-secondary:hover {
+            box-shadow: var(--neu-raised);
+            color: var(--accent-start);
+        }
+
+        .btn-danger {
+            background: var(--bg-base);
+            color: var(--danger);
+            box-shadow: var(--neu-flat);
+            padding: 16px 32px;
+            border-radius: var(--radius-sm);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 16px;
+        }
+
+        .btn-danger:hover {
+            box-shadow: var(--neu-raised);
+            color: #b91c1c;
+        }
+
+        .status-msg {
+            margin: 24px 0 0;
+            font-weight: 600;
+            color: var(--text-main);
+            text-align: center;
+        }
+
+        #floatingTips {
+            display: none;
+            margin-top: 16px;
+            padding: 16px;
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: var(--radius-sm);
+            border-left: 4px solid var(--accent-start);
+            color: var(--accent-start);
+            font-weight: 600;
+            font-size: 0.95rem;
+            animation: fadeIn 0.3s ease;
+            text-align: center;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(5px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .progress-wrap {
+            margin-top: 16px;
+            display: none;
+            padding: 4px;
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: 999px;
+        }
+
+        .progress-bar {
+            height: 8px;
+            border-radius: 999px;
+            background: transparent;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-fill {
+            width: 30%;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--accent-start), #bae6fd, var(--accent-end));
+            background-size: 200% 100%;
+            animation: pulseMove 1.5s linear infinite;
+        }
+
+        @keyframes pulseMove {
+            0% {
+                background-position: 100% 0;
+            }
+
+            100% {
+                background-position: -100% 0;
+            }
+        }
+
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 32px;
+        }
+
+        .video-card {
+            background: var(--bg-base);
+            box-shadow: var(--neu-flat);
+            border-radius: var(--radius-md);
+            padding: 20px;
+            transition: transform 0.3s ease;
+        }
+
+        .video-card:hover {
+            transform: translateY(-4px);
+        }
+
+        .video-card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 16px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        video {
+            width: 100%;
+            border-radius: var(--radius-sm);
+            background: #0f172a;
+            box-shadow: var(--neu-pressed);
+            outline: none;
+        }
+
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .metric {
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: var(--radius-sm);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            transition: box-shadow 0.2s ease;
+        }
+
+        .metric:hover {
+            box-shadow: var(--neu-flat);
+        }
+
+        .metric b {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .metric span {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .risk-chip {
+            display: inline-block;
+            margin-left: 8px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            color: #fff;
+            font-size: 0.75rem;
+            font-weight: 700;
+            box-shadow: var(--neu-sm);
+        }
+
+        .risk-low {
+            background: var(--ok);
+        }
+
+        .risk-medium {
+            background: var(--warn);
+        }
+
+        .risk-high {
+            background: var(--danger);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+        }
+
+        .tips-list {
+            margin: 0;
+            padding-left: 20px;
+            line-height: 1.6;
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 1rem;
+        }
+
+        .tips-list li {
+            margin-bottom: 8px;
+        }
+
+        .compare-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        .compare-card {
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: var(--radius-md);
+            padding: 20px;
+        }
+
+        .compare-card b {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .compare-card .val {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .compare-card .delta {
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-top: 4px;
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 6px;
+            box-shadow: var(--neu-sm);
+            background: var(--bg-base);
+        }
+
+        .delta.up {
+            color: var(--ok);
+        }
+
+        .delta.down {
+            color: var(--danger);
+        }
+
+        .delta.flat {
+            color: var(--text-muted);
+        }
+
+        .history-actions {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-bottom: 24px;
+        }
+
+        .history-table-wrap {
+            overflow-x: auto;
+            background: var(--bg-base);
+            box-shadow: var(--neu-pressed);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+        }
+
+        .history-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0 8px;
+            min-width: 800px;
+            font-size: 0.95rem;
+        }
+
+        .history-table th,
+        .history-table td {
+            padding: 12px 16px;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .history-table thead th {
+            color: var(--text-muted);
+            font-weight: 700;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .history-table tbody tr {
+            background: var(--bg-base);
+            box-shadow: var(--neu-flat);
+            border-radius: var(--radius-sm);
+            transition: transform 0.2s;
+        }
+
+        .history-table tbody tr:hover {
+            transform: translateY(-2px);
+        }
+
+        .history-table td:first-child {
+            border-top-left-radius: var(--radius-sm);
+            border-bottom-left-radius: var(--radius-sm);
+        }
+
+        .history-table td:last-child {
+            border-top-right-radius: var(--radius-sm);
+            border-bottom-right-radius: var(--radius-sm);
+        }
+
+        /* Overlay styles */
+        .instruction-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+
+        .overlay-content {
+            background: var(--bg-base);
+            padding: 40px;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--neu-raised);
+            max-width: 600px;
+            text-align: center;
+        }
+
+        .overlay-content h2 {
+            margin-top: 0;
+            color: var(--danger);
+            font-family: 'Playfair Display', serif;
+        }
+
+        .overlay-content ul {
+            text-align: left;
+            margin: 24px 0;
+            color: var(--text-muted);
+            line-height: 1.8;
+        }
+
+        .overlay-content button {
+            background: var(--accent-start);
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: var(--radius-sm);
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: var(--neu-flat);
+        }
+
+        .overlay-content button:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--neu-raised);
+        }
+
+        @media (max-width: 900px) {
+            .hero {
+                grid-template-columns: 1fr;
+            }
+
+            .hero-main {
+                padding: 24px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="blob a"></div>
+    <div class="blob b"></div>
+
+    <nav class="navbar">
+        <div class="nav-logo">CricketBowling</div>
+        <div class="nav-user"><span class="status-dot"></span><span
+                style="font-size:0.9rem;font-weight:600;color:var(--text-main);">Pro Athlete</span>
+            <div class="avatar">PA</div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="tab-switcher">
+            <button id="bioTab" class="tab active" onclick="switchTab('bio')">Biomechanics Hub</button>
+            <button id="speedTab" class="tab" onclick="switchTab('speed')">Speed Lab</button>
+        </div>
+
+        <!-- SPEED VIEW OVERLAY -->
+        <div class="instruction-overlay" id="instructionOverlay">
+            <div class="overlay-content">
+                <h2>⚠️ Strict Recording Rules for Speed</h2>
+                <p>Speed analysis uses physics displacement. Incorrect angles generate wildly wrong results.</p>
+                <ul>
+                    <li>Camera <b>must be placed strictly side-on</b> at a fixed distance.</li>
+                    <li>Entire pitch distance must be clearly visible.</li>
+                    <li>Use a fixed tripod. Zero camera movement.</li>
+                    <li>High-frame-rate is strongly recommended.</li>
+                </ul>
+                <button onclick="dismissInstructions()">I Understand</button>
+            </div>
+        </div>
+
+        <!-- SPEED VIEW MAIN -->
+        <div id="speedView" style="display: none;">
+            <section class="hero" style="grid-template-columns: 1fr;">
+                <div class="hero-main" style="text-align: center;">
+                    <h1>Professional Speed Lab</h1>
+                    <p>Standalone object tracking module for accurate speed estimation.</p>
+                </div>
+            </section>
+
+            <section class="panel">
+                <h3>Speed Upload Console</h3>
+                <div class="upload-zone">
+                    <div class="upload-grid">
+                        <div class="field">
+                            <label for="pitchLength">Pitch Length (meters)</label>
+                            <input type="number" step="0.01" id="pitchLength" value="20.12">
+                        </div>
+                        <div class="field">
+                            <label for="speedFile">Upload Video</label>
+                            <input type="file" id="speedFile" accept="video/*">
+                            <label class="checkline"><input type="checkbox" id="speedAck"> I confirm the video meets
+                                strict side-on rules.</label>
+                        </div>
+                    </div>
+                    <div><button class="btn-primary" id="speedUploadBtn" onclick="uploadSpeed()">Compute Speed
+                            Physics</button></div>
+                    <div id="speedProgressWrap" class="progress-wrap">
+                        <div class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                    </div>
+                    <p id="speedStatus" class="status-msg">Waiting for upload...</p>
+                </div>
+            </section>
+
+            <section class="panel">
+                <h3>Verification Dashboard</h3>
+                <div class="analysis-grid" style="margin-bottom: 24px;">
+                    <div class="metric"><b>Estimated Speed</b><span id="speedResultVal">-</span></div>
+                    <div class="metric"><b>Confidence Level</b><span id="speedConfVal">-</span></div>
+                    <div class="metric"><b>Frames Tracked</b><span id="speedAccuracyVal">-</span></div>
+                </div>
+                <div class="video-grid" style="grid-template-columns: 1fr;">
+                    <div class="video-card">
+                        <h3>Tracking Visualizer</h3>
+                        <video id="speedVideoPlayer" controls></video>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- BIO VIEW MAIN -->
+        <div id="bioView">
+            <section class="hero">
+                <div class="hero-main">
+                    <h1>Cricket Biomechanics Hub</h1>
+                    <p>Skeptical overlay and practical coaching cues in one premium dashboard. (Speed analysis moved to
+                        Speed Lab)</p>
+                    <div class="tag-row"><span class="tag">AI Skeleton</span><span class="tag">Injury Risk</span><span
+                            class="tag">Phase Sync</span></div>
+                </div>
+                <div class="hero-side">
+                    <h3>Session Snapshot</h3>
+                    <div class="mini-grid">
+                        <div class="mini-box"><b>Bowler</b><span id="sessionBowler">-</span></div>
+                        <div class="mini-box"><b>Type</b><span id="sessionType">-</span></div>
+                        <div class="mini-box"><b>Status</b><span id="sessionStatus">Idle</span></div>
+                        <div class="mini-box"><b>Risk</b><span id="sessionRisk">-</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel">
+                <h3>Upload Console</h3>
+                <div class="upload-zone">
+                    <div class="upload-grid">
+                        <div class="field"><label for="bowlerName">Bowler Name</label><input type="text" id="bowlerName"
+                                placeholder="Enter bowler name"></div>
+                        <div class="field"><label for="bowlerType">Bowling Type</label><select id="bowlerType">
+                                <option value="pace">Pace</option>
+                                <option value="spin">Spin</option>
+                            </select></div>
+                        <div class="field"><label for="analysisMode">Capture Mode</label><select id="analysisMode">
+                                <option value="single">Single Camera</option>
+                                <option value="dual">Dual Camera (beta)</option>
+                            </select></div>
+                        <div class="field"><label for="file">Upload Video</label><input type="file" id="file"
+                                accept="video/*"><label class="checkline"><input type="checkbox" id="captureAck">
+                                Confirmed side-on view</label></div>
+                        <div class="field"><label for="secondaryFile">Secondary Camera (optional)</label><input
+                                type="file" id="secondaryFile" accept="video/*"></div>
+                    </div>
+                    <div><button class="btn-primary" id="uploadBtn" onclick="upload()">Analyze Biomechanics</button>
+                    </div>
+                    <div id="progressWrap" class="progress-wrap">
+                        <div class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                    </div>
+                    <p id="status" class="status-msg">Waiting for upload...</p>
+                    <div id="floatingTips"></div>
+                </div>
+            </section>
+
+            <section class="panel video-grid">
+                <div class="video-card">
+                    <h3>Video Preview</h3><video id="video" controls></video>
+                </div>
+                <div class="video-card">
+                    <h3>Skeleton Overlay</h3><video id="skeleton" controls></video>
+                </div>
+                <div class="video-card">
+                    <h3>Body Angle Flexion</h3><video id="anglesVideo" controls></video>
+                </div>
+                <div class="video-card">
+                    <h3>Chucking Analysis</h3><video id="chuckingVideo" controls></video>
+                </div>
+            </section>
+
+            <section class="panel">
+                <h3>Biomechanical Engine Data</h3>
+                <div class="analysis-grid">
+                    <div class="metric"><b>Bowler</b><span id="bowlerSummary">-</span></div>
+                    <div class="metric"><b>Analysis Quality</b><span id="analysisQuality">-</span></div>
+                    <div class="metric"><b>Camera Quality</b><span id="cameraQuality">-</span></div>
+                    <div class="metric"><b>Confidence Ratio</b><span id="confidenceRatio">-</span></div>
+                    <div class="metric"><b>Lean Confidence</b><span id="leanConf">-</span></div>
+                    <div class="metric"><b>Contact Confidence</b><span id="contactConf">-</span></div>
+                    <div class="metric"><b>Release Confidence</b><span id="releaseConf">-</span></div>
+                    <div class="metric"><b>Lean Angle</b><span id="lean">-</span></div>
+                    <div class="metric"><b>Shoulder Alignment</b><span id="shoulder">-</span></div>
+                    <div class="metric"><b>Head Position</b><span id="head">-</span></div>
+                    <div class="metric"><b>Current Phase</b><span id="phase">-</span></div>
+                    <div class="metric"><b>Weight Transfer</b><span id="weight">-</span></div>
+                    <div class="metric"><b>Front Knee Flexion</b><span id="knee">-</span></div>
+                    <div class="metric"><b>Elbow Extension</b><span id="elbowExt">-</span></div>
+                    <div class="metric"><b>Chucking Screen</b><span id="chucking">-</span></div>
+                    <div class="metric"><b>FPS</b><span id="fps">-</span></div>
+                    <div class="metric"><b>Chucking Gate</b><span id="chuckGate">-</span></div>
+                    <div class="metric"><b>Injury Risk</b><span><span id="risk">-</span><span
+                                id="riskChip"></span></span></div>
+                    <!-- Removed Speed metrics here -->
+                </div>
+            </section>
+
+            <section class="panel">
+                <h3>Performance Tips & Improvements</h3>
+                <ul id="tipsList" class="tips-list">
+                    <li>Upload a video to generate personalized tips.</li>
+                </ul>
+            </section>
+
+            <section class="panel">
+                <h3>Per-Delivery Report Export</h3>
+                <div class="history-actions"><button class="btn-secondary" onclick="downloadDeliveryJson()">Download
+                        JSON</button><button class="btn-secondary" onclick="downloadElbowCsv()">Download Elbow
+                        Curve</button></div>
+            </section>
+
+            <section class="panel">
+                <h3>Session History & Comparison</h3>
+                <div class="history-actions"><button class="btn-secondary" onclick="loadSessionHistory()">Refresh
+                        History</button><button class="btn-danger" onclick="clearSessionHistory()">Clear
+                        History</button></div>
+                <div id="compareCards" class="compare-grid">
+                    <div class="compare-card"><b>Status</b>
+                        <div class="val">Upload at least two to compare.</div>
+                    </div>
+                </div>
+                <div class="history-table-wrap">
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Bowler</th>
+                                <th>Type</th>
+                                <th>Lean</th>
+                                <th>Knee</th>
+                                <th>Risk</th>
+                                <th>Quality</th>
+                            </tr>
+                        </thead>
+                        <tbody id="historyBody">
+                            <tr>
+                                <td colspan="7" style="text-align:center;">No sessions yet.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        const baseProcessingTips = [
+            "Keep your run-up rhythm smooth and avoid sudden speed changes.",
+            "Stay side-on through back-foot contact for better alignment.",
+            "Use your non-bowling arm strongly to improve momentum transfer.",
+            "Land with a stable front leg to improve release control.",
+            "Warm up hips, hamstrings, and shoulders before every spell.",
+            "Core strength and balance work can improve line/length consistency."
+        ];
+
+        const paceTips = [
+            "Pace: Drive through the crease with stronger hip-shoulder separation.",
+            "Pace: Focus on front-leg bracing to transfer momentum into the ball.",
+            "Pace: Sprint mechanics drills can improve approach speed."
+        ];
+
+        const spinTips = [
+            "Spin: Keep head still at release for better control and drift.",
+            "Spin: Finger and wrist snap timing is key to revolutions.",
+            "Spin: Emphasize repeatable run-up and consistent release point."
+        ];
+
+        let tipTimer = null;
+        let tipIndex = 0;
+        let latestDeliveryReport = null;
+
+        function fmtDelta(value, higherIsBetter = true, suffix = "") {
+            if (value == null || Number.isNaN(value)) return { text: "no change", cls: "flat" };
+            if (Math.abs(value) < 0.01) return { text: "no change", cls: "flat" };
+            const improved = higherIsBetter ? value > 0 : value < 0;
+            const sign = value > 0 ? "+" : "";
+            return { text: `${sign}${value.toFixed(2)}${suffix}`, cls: improved ? "up" : "down" };
+        }
+
+        function riskScore(risk) {
+            const t = String(risk || "").toLowerCase();
+            if (t.includes("high")) return 3;
+            if (t.includes("moderate")) return 2;
+            if (t.includes("low")) return 1;
+            return 0;
+        }
+
+        function formatWhen(ts) {
+            const d = new Date(ts);
+            if (Number.isNaN(d.getTime())) return "-";
+            return d.toLocaleString();
+        }
+
+        function renderComparison(sessions) {
+            const host = document.getElementById("compareCards");
+            if (!Array.isArray(sessions) || sessions.length < 2) {
+                host.innerHTML = '<div class="compare-card"><b>Status</b><div class="val">Upload at least two sessions to compare.</div></div>';
+                return;
+            }
+            const latest = sessions[0];
+            const prev = sessions[1];
+            const la = latest.analysis || {};
+            const pa = prev.analysis || {};
+
+
+            const leanDelta = fmtDelta(Number(la.leanAngle || 0) - Number(pa.leanAngle || 0), false, " deg");
+            const kneeDelta = fmtDelta(Number(la.kneeFlexion || 0) - Number(pa.kneeFlexion || 0), false, " deg");
+            const riskDeltaRaw = riskScore(la.injuryRisk) - riskScore(pa.injuryRisk);
+            const riskDelta = fmtDelta(riskDeltaRaw, false, " risk step");
+
+            host.innerHTML = `
+        
+        <div class="compare-card"><b>Lean Angle</b><div class="val">${la.leanAngle ?? "-"} deg</div><div class="delta ${leanDelta.cls}">${leanDelta.text} vs prev</div></div>
+        <div class="compare-card"><b>Knee Flexion</b><div class="val">${la.kneeFlexion ?? "-"} deg</div><div class="delta ${kneeDelta.cls}">${kneeDelta.text} vs prev</div></div>
+        <div class="compare-card"><b>Injury Risk</b><div class="val">${la.injuryRisk ?? "-"}</div><div class="delta ${riskDelta.cls}">${riskDelta.text} vs prev</div></div>
+    `;
+        }
+
+        function renderHistoryTable(sessions) {
+            const body = document.getElementById("historyBody");
+            if (!Array.isArray(sessions) || sessions.length === 0) {
+                body.innerHTML = '<tr><td colspan="8">No sessions yet.</td></tr>';
+                return;
+            }
+            body.innerHTML = "";
+            sessions.forEach((s) => {
+                const a = s.analysis || {};
+                const tr = document.createElement("tr");
+                const cols = [
+                    formatWhen(s.timestamp),
+                    s.bowlerName || "-",
+                    s.bowlerType || "-",
+                    `${a.leanAngle ?? "-"} deg`,
+                    `${a.kneeFlexion ?? "-"} deg`,
+                    a.injuryRisk ?? "-",
+                    a.analysisQuality ?? "-"
+                ];
+                cols.forEach((c) => {
+                    const td = document.createElement("td");
+                    td.textContent = c;
+                    tr.appendChild(td);
+                });
+                body.appendChild(tr);
+            });
+        }
+
+        async function loadSessionHistory() {
+            try {
+                const res = await fetch("/api/video/sessions?limit=12");
+                const sessions = await res.json();
+                if (!Array.isArray(sessions)) return;
+                renderComparison(sessions);
+                renderHistoryTable(sessions);
+            } catch (e) {
+                // Keep UI silent if history API is not available yet.
+            }
+        }
+
+        async function clearSessionHistory() {
+            const ok = window.confirm("Clear all saved session history? This cannot be undone.");
+            if (!ok) return;
+            try {
+                const res = await fetch("/api/video/sessions/clear", { method: "POST" });
+                const data = await res.json();
+                const cleared = Number(data.cleared || 0);
+                document.getElementById("status").textContent = `History cleared (${cleared} session${cleared === 1 ? "" : "s"}).`;
+                loadSessionHistory();
+            } catch (e) {
+                document.getElementById("status").textContent = "Unable to clear history right now.";
+            }
+        }
+
+        async function getVideoMeta(file) {
+            return new Promise((resolve, reject) => {
+                const tempVideo = document.createElement("video");
+                const url = URL.createObjectURL(file);
+                tempVideo.preload = "metadata";
+                tempVideo.onloadedmetadata = () => {
+                    const meta = {
+                        duration: Number(tempVideo.duration || 0),
+                        width: Number(tempVideo.videoWidth || 0),
+                        height: Number(tempVideo.videoHeight || 0)
+                    };
+                    URL.revokeObjectURL(url);
+                    resolve(meta);
+                };
+                tempVideo.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error("Unable to read selected video metadata."));
+                };
+                tempVideo.src = url;
+            });
+        }
+
+        async function validateBeforeUpload(file, mode, secondaryFile) {
+            const captureAck = document.getElementById("captureAck");
+            if (!captureAck || !captureAck.checked) {
+                return "Please confirm side-on + 60/120fps capture requirement before upload.";
+            }
+            const fileName = (file.name || "").toLowerCase();
+            const allowed = [".mp4", ".mov", ".m4v", ".webm"];
+            if (!allowed.some(ext => fileName.endsWith(ext))) {
+                return "Use MP4/MOV/M4V/WEBM format for best compatibility.";
+            }
+            const meta = await getVideoMeta(file);
+            if (meta.duration < 4 || meta.duration > 25) {
+                return "Video should be about 4 to 25 seconds and include full run-up + follow-through.";
+            }
+            if (meta.width < 720 || meta.height < 400) {
+                return "Please upload at least 720p-ish quality so landmarks are reliable.";
+            }
+            if (mode === "dual" && !secondaryFile) {
+                return "Dual mode selected: please upload a secondary camera clip.";
+            }
+            if (mode === "dual" && secondaryFile) {
+                const secondaryMeta = await getVideoMeta(secondaryFile);
+                if (secondaryMeta.duration < 4 || secondaryMeta.duration > 25) {
+                    return "Secondary clip should also be 4 to 25 seconds.";
+                }
+            }
+            return null;
+        }
+
+        function showFloatingTip(text) {
+            const box = document.getElementById("floatingTips");
+            box.style.display = "block";
+            box.textContent = "Tip: " + text;
+        }
+
+        function startProcessingTips(type) {
+            const list = type === "spin" ? spinTips.concat(baseProcessingTips) : paceTips.concat(baseProcessingTips);
+            tipIndex = 0;
+            showFloatingTip(list[tipIndex % list.length]);
+            tipTimer = setInterval(() => {
+                tipIndex++;
+                showFloatingTip(list[tipIndex % list.length]);
+            }, 2100);
+        }
+
+        function stopProcessingTips() {
+            if (tipTimer) {
+                clearInterval(tipTimer);
+                tipTimer = null;
+            }
+        }
+
+        function riskClass(risk) {
+            if (!risk) return "";
+            const v = risk.toLowerCase();
+            if (v.includes("high")) return "risk-chip risk-high";
+            if (v.includes("moderate")) return "risk-chip risk-medium";
+            return "risk-chip risk-low";
+        }
+
+        function buildImprovementTips(analysis, bowlerType) {
+            const tips = [];
+            const lean = Number(analysis.leanAngle ?? 0);
+            const speed = Number(analysis.speed ?? 0);
+            const knee = Number(analysis.kneeFlexion ?? 0);
+            const risk = String(analysis.injuryRisk ?? "").toLowerCase();
+            const weight = String(analysis.weightTransfer ?? "");
+            const phaseNow = String(analysis.currentPhase ?? "Run-up");
+            const phaseSummary = Array.isArray(analysis.phaseSummary) ? analysis.phaseSummary : [];
+            const hasBackFoot = analysis.backFootContactFrame != null;
+            const hasFrontFoot = analysis.footContactFrame != null;
+            const hasRelease = analysis.releaseFrame != null;
+            const chucking = Boolean(analysis.chuckingSuspected);
+            const chuckVerdict = String(analysis.chuckingVerdict ?? "INCONCLUSIVE");
+            const elbowExt = Number(analysis.elbowExtensionDeg ?? 0);
+
+            if (lean > 22) {
+                tips.push("Length/Control: Reduce torso lean with stronger trunk bracing and a stable head position at release.");
+            } else {
+                tips.push("Length/Control: Torso position is stable. Continue line and length target bowling sets.");
+            }
+
+            if (knee > 150) {
+                tips.push("Front-leg mechanics: Slightly softer knee flexion may lower impact load at landing.");
+            } else if (knee < 120) {
+                tips.push("Front-leg mechanics: Build firmer front-leg bracing to improve momentum transfer.");
+            }
+
+            if (weight.toLowerCase().includes("poor")) {
+                tips.push("Weight transfer: Use back-foot to front-foot drills and stronger non-bowling arm pull-down.");
+            }
+
+            if (risk.includes("high")) {
+                tips.push("Injury risk: High. Reduce workload and prioritize mobility and shoulder stability blocks.");
+            } else if (risk.includes("moderate")) {
+                tips.push("Injury risk: Moderate. Add prehab routines 3-4 times weekly for cuff, glute and ankle stability.");
+            } else {
+                tips.push("Injury risk: Low. Maintain conditioning and progress weekly load gradually.");
+            }
+
+            if (bowlerType === "spin") {
+                tips.push("Spin focus: Improve release repeatability and seam/finger position with short technical spells.");
+            } else {
+                tips.push("Pace focus: Improve hip-shoulder separation timing for more pace without overstriding.");
+            }
+
+            // Phase-wise coaching
+            if (!hasBackFoot) {
+                tips.push("Run-up phase: Back-foot contact was not clearly detected. Keep full body in frame and use a stable side-on camera angle.");
+            } else {
+                tips.push("Run-up phase: Back-foot contact is detected. Focus on a smooth approach and consistent stride rhythm.");
+            }
+
+            if (!hasFrontFoot) {
+                tips.push("Front-foot contact phase: Detection is weak. Improve lighting and keep the landing leg visible for more reliable feedback.");
+            } else if (knee > 150) {
+                tips.push("Front-foot contact phase: Landing appears stiff. Slightly increase controlled knee flexion to reduce impact loading.");
+            } else {
+                tips.push("Front-foot contact phase: Landing mechanics are reasonable. Continue drills for balanced front-leg bracing.");
+            }
+
+            if (!hasRelease) {
+                tips.push("Release phase: Release event was not confidently detected. Use higher frame-rate video and ensure wrist is visible near release.");
+            } else if (lean > 22) {
+                tips.push("Release phase: Excess torso lean at release may reduce control. Work on upright head and trunk alignment at ball release.");
+            } else {
+                tips.push("Release phase: Release posture is stable. Build consistency with target-based release drills.");
+            }
+
+            if (phaseNow === "Follow-through") {
+                tips.push("Follow-through phase: Let momentum carry forward naturally and avoid abrupt braking to reduce lower-back stress.");
+            }
+
+            if (phaseSummary.length > 0) {
+                const names = phaseSummary.map(p => p.phase).join(" -> ");
+                tips.push("Detected sequence: " + names + ".");
+            }
+
+            if (chuckVerdict === "INCONCLUSIVE") {
+                tips.push("Action screening: Inconclusive due to capture/confidence gate. Use side-on full-body 60/120fps video.");
+            } else if (chucking) {
+                tips.push(`Action screening: Possible chucking detected (${elbowExt.toFixed(1)} deg elbow extension > 15 deg). Recheck with high-frame-rate side-on video and formal biomechanical review.`);
+            } else {
+                tips.push(`Action screening: Elbow extension within ICC screening threshold (${elbowExt.toFixed(1)} deg <= 15 deg).`);
+            }
+
+            tips.push("Fitness: Plan 2 strength sessions and 2 mobility sessions each week.");
+            return tips;
+        }
+
+        function renderTips(list) {
+            const el = document.getElementById("tipsList");
+            el.innerHTML = "";
+            list.forEach((tip) => {
+                const li = document.createElement("li");
+                li.textContent = tip;
+                el.appendChild(li);
+            });
+        }
+
+        let currentPipeline = 'biomechanics';
+
+        function switchTab(tab) {
+            currentPipeline = tab;
+            if (tab === 'bio') {
+                document.getElementById('bioTab').classList.add('active');
+                document.getElementById('speedTab').classList.remove('active');
+                document.getElementById('bioView').style.display = 'block';
+                document.getElementById('speedView').style.display = 'none';
+                document.getElementById('instructionOverlay').style.display = 'none';
+            } else {
+                document.getElementById('bioTab').classList.remove('active');
+                document.getElementById('speedTab').classList.add('active');
+                document.getElementById('bioView').style.display = 'none';
+                document.getElementById('speedView').style.display = 'block';
+                document.getElementById('instructionOverlay').style.display = 'flex';
+            }
+        }
+
+        function dismissInstructions() {
+            document.getElementById('instructionOverlay').style.display = 'none';
+        }
+
+        async function uploadSpeed() {
+            const f = document.getElementById("speedFile").files[0];
+            const pitchLength = document.getElementById("pitchLength").value || "20.12";
+            const uploadBtn = document.getElementById("speedUploadBtn");
+            const status = document.getElementById("speedStatus");
+            const progressWrap = document.getElementById("speedProgressWrap");
+            const speedAck = document.getElementById("speedAck");
+
+            if (!f) {
+                status.textContent = "Please choose a file.";
+                return;
+            }
+            if (!speedAck || !speedAck.checked) {
+                status.textContent = "Please confirm the camera setup requirements.";
+                return;
+            }
+
+            const fd = new FormData();
+            fd.append("file", f);
+            fd.append("pipelineType", "speed");
+            fd.append("pitchLength", pitchLength);
+
+            uploadBtn.disabled = true;
+            status.textContent = "Processing speed tracking... please wait.";
+            progressWrap.style.display = "block";
+
+            let data;
+            try {
+                const res = await fetch("/api/video/upload", { method: "POST", body: fd });
+                data = await res.json();
+            } catch (err) {
+                status.textContent = "Upload failed or server error.";
+                progressWrap.style.display = "none";
+                uploadBtn.disabled = false;
+                return;
+            }
+
+            if (data.error) {
+                status.textContent = data.error;
+                progressWrap.style.display = "none";
+                uploadBtn.disabled = false;
+                return;
+            }
+
+            progressWrap.style.display = "none";
+            uploadBtn.disabled = false;
+            status.textContent = "Speed Analysis completed.";
+
+            const analysis = data.analysis || {};
+            document.getElementById("speedResultVal").textContent = (analysis.estimatedSpeed || "-") + " km/h";
+            document.getElementById("speedConfVal").textContent = analysis.confidenceLevel || "-";
+            document.getElementById("speedAccuracyVal").textContent = analysis.trackingFrames ? analysis.trackingFrames + " frames tracked" : "Failed";
+
+            const ts = Date.now();
+            const video = document.getElementById("speedVideoPlayer");
+            video.src = data.speedVideoUrl ? `${data.speedVideoUrl}?t=${ts}` : "";
+            video.load();
+        }
+
+
+
+        async function upload() {
+            const f = document.getElementById("file").files[0];
+            const f2 = document.getElementById("secondaryFile").files[0];
+            const bowlerName = (document.getElementById("bowlerName").value || "").trim();
+            const bowlerType = document.getElementById("bowlerType").value || "pace";
+            const analysisMode = document.getElementById("analysisMode").value || "single";
+            const uploadBtn = document.getElementById("uploadBtn");
+            const status = document.getElementById("status");
+            const riskChip = document.getElementById("riskChip");
+            const floatingTips = document.getElementById("floatingTips");
+            const progressWrap = document.getElementById("progressWrap");
+
+            if (!f) {
+                status.textContent = "Please choose a file.";
+                return;
+            }
+            try {
+                const validationMessage = await validateBeforeUpload(f, analysisMode, f2);
+                if (validationMessage) {
+                    status.textContent = validationMessage;
+                    return;
+                }
+            } catch (metaErr) {
+                status.textContent = "Could not validate video. Please choose another clip.";
+                return;
+            }
+
+            const fd = new FormData();
+            fd.append("file", f);
+            fd.append("bowlerName", bowlerName);
+            fd.append("bowlerType", bowlerType);
+            fd.append("analysisMode", analysisMode);
+            fd.append("pipelineType", "biomechanics");
+            fd.append("pipelineType", "biomechanics");
+            if (f2) {
+                fd.append("secondaryFile", f2);
+            }
+
+            uploadBtn.disabled = true;
+            riskChip.className = "";
+            riskChip.textContent = "";
+            status.textContent = "Processing started... please wait.";
+            document.getElementById("sessionStatus").textContent = "Processing";
+            document.getElementById("sessionBowler").textContent = bowlerName || "Bowler";
+            document.getElementById("sessionType").textContent = bowlerType;
+            progressWrap.style.display = "block";
+            startProcessingTips(bowlerType);
+            renderTips(["Analyzing your bowling action. Tips will appear after processing."]);
+
+            let data;
+            try {
+                const res = await fetch("/api/video/upload", { method: "POST", body: fd });
+                data = await res.json();
+            } catch (err) {
+                status.textContent = "Upload failed or server error.";
+                document.getElementById("sessionStatus").textContent = "Error";
+                stopProcessingTips();
+                progressWrap.style.display = "none";
+                uploadBtn.disabled = false;
+                return;
+            }
+
+            if (data.error) {
+                status.textContent = data.error;
+                document.getElementById("sessionStatus").textContent = "Error";
+                stopProcessingTips();
+                progressWrap.style.display = "none";
+                uploadBtn.disabled = false;
+                return;
+            }
+
+            stopProcessingTips();
+            floatingTips.style.display = "none";
+            progressWrap.style.display = "none";
+            uploadBtn.disabled = false;
+            status.textContent = "Analysis completed.";
+            document.getElementById("sessionStatus").textContent = "Complete";
+
+            const analysis = data.analysis || {};
+            latestDeliveryReport = {
+                generatedAt: new Date().toISOString(),
+                jobId: data.jobId || "",
+                bowlerName: bowlerName || "",
+                bowlerType: bowlerType || "",
+                analysis
+            };
+            document.getElementById("bowlerSummary").textContent = (bowlerName || "Bowler") + " (" + bowlerType + ")";
+            document.getElementById("analysisQuality").textContent = analysis.analysisQuality ?? "-";
+            document.getElementById("cameraQuality").textContent = analysis.cameraAngleQuality ?? "-";
+            document.getElementById("confidenceRatio").textContent = analysis.confidenceRatio != null
+                ? `${Math.round(Number(analysis.confidenceRatio) * 100)}%`
+                : "-";
+            const conf = analysis.metricConfidence || {};
+            document.getElementById("leanConf").textContent = conf.lean != null ? `${Math.round(Number(conf.lean) * 100)}%` : "-";
+
+            document.getElementById("contactConf").textContent = conf.contact != null ? `${Math.round(Number(conf.contact) * 100)}%` : "-";
+            document.getElementById("releaseConf").textContent = conf.release != null ? `${Math.round(Number(conf.release) * 100)}%` : "-";
+            document.getElementById("lean").textContent = (analysis.leanAngle ?? "-") + " deg";
+            document.getElementById("shoulder").textContent = analysis.shoulder ?? "-";
+            document.getElementById("head").textContent = analysis.head ?? "-";
+            document.getElementById("phase").textContent = analysis.currentPhase ?? "-";
+            document.getElementById("weight").textContent = analysis.weightTransfer ?? "-";
+
+            document.getElementById("knee").textContent = (analysis.kneeFlexion ?? "-") + " deg";
+            document.getElementById("elbowExt").textContent = (analysis.elbowExtensionDeg ?? "-") + " deg";
+            const chuckingVerdict = String(analysis.chuckingVerdict ?? "INCONCLUSIVE");
+            document.getElementById("chucking").textContent = chuckingVerdict;
+            document.getElementById("fps").textContent = analysis.fps != null ? `${analysis.fps} fps` : "-";
+            const gateReasons = Array.isArray(analysis.chuckingGateReasons) ? analysis.chuckingGateReasons : [];
+            let gateText = "PASS";
+            if (!analysis.chuckingGatePassed) {
+                if (gateReasons.includes("FPS_BELOW_60") || analysis.fpsGatePassed === false) {
+                    gateText = "BLOCKED (NEED >=60 FPS)";
+                } else if (gateReasons.includes("CAMERA_QUALITY_POOR") || analysis.cameraGatePassed === false) {
+                    gateText = "BLOCKED (CAMERA QUALITY)";
+                } else if (gateReasons.includes("ARM_NOT_CLEARLY_VISIBLE")) {
+                    gateText = "BLOCKED (ARM NOT CLEAR)";
+                } else if (gateReasons.includes("ELBOW_SIGNAL_CONFIDENCE_LOW")) {
+                    gateText = "BLOCKED (ELBOW SIGNAL LOW)";
+                } else {
+                    gateText = "BLOCKED (LOW CONFIDENCE)";
+                }
+            }
+            document.getElementById("chuckGate").textContent = gateText;
+            document.getElementById("risk").textContent = analysis.injuryRisk ?? "-";
+            document.getElementById("sessionRisk").textContent = analysis.injuryRisk ?? "-";
+            riskChip.className = riskClass(analysis.injuryRisk);
+            riskChip.textContent = analysis.injuryRisk ? analysis.injuryRisk : "";
+
+            if (analysis.warning) {
+                status.textContent = analysis.warning;
+            }
+            if (chuckingVerdict === "INCONCLUSIVE" && !analysis.chuckingGatePassed) {
+                const reasonText = gateReasons.length ? ` Reasons: ${gateReasons.join(", ")}.` : "";
+                status.textContent = "Chucking screen is inconclusive because quality gate failed. Use side-on full body video at 60/120 fps with clear arm visibility." + reasonText;
+            }
+            if (data.analysisMode === "dual" && data.dualCameraReconstruction === false) {
+                status.textContent = "Dual-camera mode is in beta scaffolding. Current analysis uses primary camera metrics.";
+            }
+
+            renderTips(buildImprovementTips(analysis, bowlerType));
+
+            const ts = Date.now();
+            const video = document.getElementById("video");
+            video.src = data.originalVideoUrl ? `${data.originalVideoUrl}?t=${ts}` : "";
+            video.load();
+
+            const skeleton = document.getElementById("skeleton");
+            skeleton.src = data.skeletonVideoUrl ? `${data.skeletonVideoUrl}?t=${ts}` : "";
+            skeleton.load();
+
+            const anglesVideo = document.getElementById("anglesVideo");
+            anglesVideo.src = data.angleVideoUrl ? `${data.angleVideoUrl}?t=${ts}` : "";
+            anglesVideo.load();
+
+            const chuckingVideo = document.getElementById("chuckingVideo");
+            chuckingVideo.src = data.chuckingVideoUrl ? `${data.chuckingVideoUrl}?t=${ts}` : "";
+            chuckingVideo.load();
+
+            loadSessionHistory();
+        }
+
+        function downloadBlob(filename, mimeType, content) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadDeliveryJson() {
+            if (!latestDeliveryReport) {
+                document.getElementById("status").textContent = "Run one analysis first to export a delivery report.";
+                return;
+            }
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+            downloadBlob(`delivery-report-${stamp}.json`, "application/json", JSON.stringify(latestDeliveryReport, null, 2));
+        }
+
+        function downloadElbowCsv() {
+            if (!latestDeliveryReport || !latestDeliveryReport.analysis) {
+                document.getElementById("status").textContent = "Run one analysis first to export elbow curve.";
+                return;
+            }
+            const series = Array.isArray(latestDeliveryReport.analysis.elbowAngleSeries)
+                ? latestDeliveryReport.analysis.elbowAngleSeries
+                : [];
+            if (series.length === 0) {
+                document.getElementById("status").textContent = "No elbow-angle curve available for this delivery.";
+                return;
+            }
+            const lines = ["frame,elbow_angle_deg"];
+            series.forEach((p) => {
+                lines.push(`${p.frame},${p.angle}`);
+            });
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+            downloadBlob(`elbow-curve-${stamp}.csv`, "text/csv", lines.join("\n"));
+        }
+
+        loadSessionHistory();
+    </script>

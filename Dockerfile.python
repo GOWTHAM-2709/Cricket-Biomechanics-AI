@@ -1,0 +1,59 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Cricket AI — Python Microservice  (optimized, stable, production-ready)
+# ═══════════════════════════════════════════════════════════════════════════
+# Image size target: < 1.2 GB  (mediapipe ≤ 0.10.9 keeps torch/CUDA out)
+# ───────────────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim
+
+# ── System deps ────────────────────────────────────────────────────────────
+# Install in a single RUN so Docker creates only ONE layer.
+# --no-install-recommends trims ~200 MB of optional packages.
+# ffmpeg brings libx264 which is what we need for browser-compatible video.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libglib2.0-0 \
+      libsm6 \
+      libxext6 \
+      libxrender1 \
+      libgomp1 \
+      libgl1 \
+      ffmpeg \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+WORKDIR /app
+
+# ── Python deps ────────────────────────────────────────────────────────────
+# Copy requirements first so Docker can cache this layer independently.
+# Pip cache is explicitly disabled (--no-cache-dir) to keep layer size minimal.
+# Timeout raised to 120s to survive slow CI/home networks.
+COPY requirements.txt .
+RUN pip install --no-cache-dir --default-timeout=120 -r requirements.txt \
+ && find /usr/local/lib/python3.11 -name "*.pyc" -delete \
+ && find /usr/local/lib/python3.11 -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# ── Application code ───────────────────────────────────────────────────────
+COPY main.py .
+
+# Analysis scripts are copied LAST so code changes don't invalidate the
+# heavy pip layer above.
+COPY src/main/resources/analysis/ ./src/main/resources/analysis/
+
+# ── Runtime setup ──────────────────────────────────────────────────────────
+RUN mkdir -p /tmp/uploads
+
+# Prevent Python from writing .pyc files at runtime (saves disk I/O in Docker)
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Suppress MediaPipe / TensorFlow / GLOG noise in logs
+ENV TF_CPP_MIN_LOG_LEVEL=3
+ENV GLOG_minloglevel=3
+ENV PYTHONWARNINGS=ignore
+
+EXPOSE 8000
+
+# uvicorn with a single worker is correct for a CPU-bound video analysis service.
+# Multiple workers would just fight over the same CPU without benefit.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

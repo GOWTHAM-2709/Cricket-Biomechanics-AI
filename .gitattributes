@@ -1,0 +1,10 @@
+String uploadDir = "C:/bowling_uploads/";  // <-- or change to D:/bowling_uploads/
+
+File folder = new File(uploadDir);
+if (!folder.exists()) {
+    folder.mkdirs();
+}
+
+String filePath = uploadDir + file.getOriginalFilename();
+File savedFile = new File(filePath);
+file.transferTo(savedFile);

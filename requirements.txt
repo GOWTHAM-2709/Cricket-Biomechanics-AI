@@ -1,0 +1,16 @@
+# ── Cricket AI Microservice Dependencies ──────────────────────────────────────
+# Pinned for Docker reproducibility. mediapipe 0.10.9 is the last version that
+# does NOT pull in torch / CUDA / jaxlib, keeping the image under ~1 GB.
+# DO NOT upgrade mediapipe past 0.10.9 without testing image size first.
+
+fastapi==0.110.0
+uvicorn==0.29.0
+pydantic==2.6.4
+
+# OpenCV headless = no GUI libs, smallest possible footprint
+opencv-python-headless==4.9.0.80
+
+# mediapipe 0.10.9 = last lightweight version (no torch/CUDA deps)
+mediapipe==0.10.9
+
+numpy==1.26.4
