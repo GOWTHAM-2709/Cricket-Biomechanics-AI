@@ -36,7 +36,7 @@ import java.util.UUID;
 @RequestMapping("/api/video")
 public class VideoUploadController {
 
-    private static final String DIR = System.getenv().getOrDefault("UPLOAD_DIR", "D:/bowling_uploads/") + "/";
+    private static final String DIR = System.getenv().getOrDefault("UPLOAD_DIR", "/tmp/uploads/") + "/";
     private static final String SESSIONS_FILE = DIR + "sessions.jsonl";
     private static final Logger log = LoggerFactory.getLogger(VideoUploadController.class);
     private final ObjectMapper mapper = new ObjectMapper();

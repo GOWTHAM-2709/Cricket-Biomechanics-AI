@@ -19,7 +19,7 @@ import java.nio.file.Files;
 @RequestMapping("/video")
 public class VideoStreamController {
 
-    private static final String DIR = System.getenv().getOrDefault("UPLOAD_DIR", "D:/bowling_uploads/") + "/";
+    private static final String DIR = System.getenv().getOrDefault("UPLOAD_DIR", "/tmp/uploads/") + "/";
 
     @GetMapping("/{filename}")
     public ResponseEntity<byte[]> streamVideo(@PathVariable String filename,
