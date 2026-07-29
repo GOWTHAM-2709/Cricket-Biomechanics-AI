@@ -90,8 +90,7 @@ pipeline {
         // Avoids race conditions on shared workspace directories.
         disableConcurrentBuilds()
 
-        // Render ANSI colour codes in the console (requires AnsiColor plugin).
-        ansiColor('xterm')
+       
     }
 
     // ──────────────────────────────────────────────────────────────────────────
