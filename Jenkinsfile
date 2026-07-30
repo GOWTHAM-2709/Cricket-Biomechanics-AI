@@ -429,24 +429,38 @@ pipeline {
         //   that gap with a retry loop.
         //
         //   ALGORITHM:
-        //     1. Try  curl --fail localhost:8081  (exits 0 on 2xx/3xx response).
-        //     2. If it fails, wait HEALTH_WAIT_SECS seconds and retry.
-        //     3. After HEALTH_RETRIES attempts, give up and fail the stage.
+        //     1. Wait 10 s for Spring Boot to initialise Tomcat.
+        //     2. Try  curl --fail localhost:8081  (exits 0 on 2xx/3xx response).
+        //     3. If it fails, sleep HEALTH_WAIT_SECS seconds and retry.
+        //     4. After HEALTH_RETRIES attempts, call error() → FAILURE.
         //
-        //   WHY PowerShell for the retry loop:
-        //     Windows CMD batch does not have a native sleep command, and the
-        //     'ping -n' hack is fragile. PowerShell's  Start-Sleep  is clean,
-        //     reliable, and available on any modern Windows system.
-        //     The bat step launches cmd.exe which can invoke powershell.exe.
+        //   WHY script{} instead of bat + PowerShell:
+        //     Embedding a PowerShell loop inside a Groovy GString ("""...""")
+        //     requires escaping every PowerShell $ variable with \$ to stop
+        //     Groovy from interpolating them. That is error-prone and caused the
+        //     "unexpected token: false" parse error.
+        //
+        //     The idiomatic Jenkins solution is a Groovy script{} block:
+        //       • All loop state ($i, $healthy, etc.) is plain Groovy — no $ clash.
+        //       • bat(returnStatus: true) captures curl's exit code without
+        //         immediately failing the step, giving us retry control.
+        //       • sleep() is a built-in Jenkins step — no PowerShell needed.
+        //       • Jenkins env vars (HEALTH_RETRIES, HEALTH_URL, etc.) are read
+        //         via env.VARIABLE — clear and explicit.
         //
         //   WHAT COUNTS AS HEALTHY:
         //     Any HTTP 2xx or 3xx from localhost:8081 (the index.html welcome page).
-        //     We intentionally avoid requiring /actuator/health because it is not
-        //     enabled in this project's pom.xml. If you add spring-boot-actuator
-        //     later, change HEALTH_URL to http://localhost:8081/actuator/health.
+        //     To use /actuator/health instead, add spring-boot-starter-actuator to
+        //     pom.xml and set HEALTH_URL = "http://localhost:${HOST_PORT}/actuator/health".
+        //
+        //   curl flags:
+        //     --fail        Exit code 1 on HTTP 4xx/5xx responses.
+        //     --silent      No download progress bars in the log.
+        //     --max-time 5  Each probe times out after 5 s (avoids blocking a retry slot).
+        //     --output NUL  Discard body — we only care about the exit code.
         //
         //   TIMEOUT SAFETY:
-        //     The outer pipeline timeout(45 MINUTES) prevents an infinite loop
+        //     The outer pipeline timeout(45 MINUTES) prevents an infinite hang
         //     if something goes catastrophically wrong.
         // ══════════════════════════════════════════════════════════════════════
         stage('Stage 7 — Health Check') {
@@ -460,62 +474,64 @@ pipeline {
                 echo "            Wait between: ${HEALTH_WAIT_SECS}s"
                 echo '═══════════════════════════════════════════════════════'
 
-                // Give Spring Boot a head start before the first probe.
-                // This avoids wasting the first few retry slots on connection
-                // refused while Tomcat is still binding the port.
-                echo '  → Waiting 10 seconds for Spring Boot to initialise...'
-                bat 'powershell -Command "Start-Sleep -Seconds 10"'
+                // ── Pure Groovy retry loop — zero PowerShell $ escaping needed ──
+                script {
+                    // Read Jenkins env vars into typed Groovy locals.
+                    // env.* is always a String; toInteger() converts for numeric ops.
+                    int  maxRetries = env.HEALTH_RETRIES.toInteger()   // 15
+                    int  waitSecs   = env.HEALTH_WAIT_SECS.toInteger() // 6
+                    String healthUrl = env.HEALTH_URL                  // http://localhost:8081
 
-                // ── Retry loop implemented as a PowerShell script ─────────────
-                // The entire block is a single bat step containing an inline
-                // PowerShell one-liner passed via -Command.
-                //
-                // Logic (plain English):
-                //   For i = 1 to HEALTH_RETRIES:
-                //     Try curl. If exit code is 0 → healthy, exit loop with 0.
-                //     Otherwise print attempt number, sleep, try again.
-                //   If all retries exhausted → exit 1 → Jenkins marks FAILURE.
-                //
-                // curl flags used:
-                //   --fail        : Exit code 1 on HTTP 4xx/5xx (not just on errors).
-                //   --silent      : Suppress download progress bars.
-                //   --max-time 5  : Each individual request times out after 5 seconds.
-                //                   Prevents one hung request consuming a full retry slot.
-                //   --output nul  : Discard response body (we only care about exit code).
-                //
-                // NOTE: curl is available on Windows 10 / Windows Server 2019+ by default.
-                // ─────────────────────────────────────────────────────────────────
-                bat """
-                    powershell -NoProfile -NonInteractive -Command ^
-                    "$retries = ${HEALTH_RETRIES}; ^
-                     $wait    = ${HEALTH_WAIT_SECS}; ^
-                     $url     = '${HEALTH_URL}'; ^
-                     $healthy = $false; ^
-                     for ($i = 1; $i -le $retries; $i++) { ^
-                         Write-Host ('[Health Check] Attempt ' + $i + ' of ' + $retries + ' → ' + $url); ^
-                         $result = & curl --fail --silent --max-time 5 --output NUL $url 2>&1; ^
-                         if ($LASTEXITCODE -eq 0) { ^
-                             Write-Host '[Health Check] ✅ Application is UP and healthy!'; ^
-                             $healthy = $true; ^
-                             break ^
-                         } ^
-                         Write-Host ('[Health Check] ⏳ Not ready yet. Waiting ' + $wait + 's...'); ^
-                         Start-Sleep -Seconds $wait ^
-                     }; ^
-                     if (-not $healthy) { ^
-                         Write-Host '[Health Check] ❌ Application did not respond after all retries.'; ^
-                         Write-Host '              Check: docker logs ${CONTAINER_NAME}'; ^
-                         exit 1 ^
-                     }"
-                """
+                    // Give Spring Boot time to bind the port before the first probe.
+                    // Without this head-start the first attempt hits connection-refused
+                    // while Tomcat is still starting, wasting a retry slot.
+                    echo '  → Waiting 10 seconds for Spring Boot to initialise...'
+                    sleep(time: 10, unit: 'SECONDS')
 
-                // Print final container state for the console log.
+                    boolean healthy = false
+
+                    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                        echo "[Health Check] Attempt ${attempt} of ${maxRetries} → ${healthUrl}"
+
+                        // bat(returnStatus: true) runs the command and returns the
+                        // OS exit code as an integer WITHOUT failing the pipeline step.
+                        // This gives us full retry control in Groovy.
+                        int exitCode = bat(
+                            script: "curl --fail --silent --max-time 5 --output NUL ${healthUrl}",
+                            returnStatus: true
+                        )
+
+                        if (exitCode == 0) {
+                            // curl exited 0 → HTTP 2xx/3xx received → app is up.
+                            echo '[Health Check] ✅ Application is UP and healthy!'
+                            healthy = true
+                            break
+                        }
+
+                        // curl exited non-zero → app not ready yet.
+                        echo "[Health Check] ⏳ Not ready (exit ${exitCode}). Waiting ${waitSecs}s..."
+                        sleep(time: waitSecs, unit: 'SECONDS')
+                    }
+
+                    if (!healthy) {
+                        // Dump the last 30 log lines to help diagnose startup failures.
+                        echo '[Health Check] ❌ Application did not respond. Dumping container logs:'
+                        bat "docker logs --tail=30 ${CONTAINER_NAME}"
+
+                        // error() sets the build to FAILURE and throws an exception
+                        // that stops the pipeline immediately — clean and explicit.
+                        error("[Health Check] Application at ${healthUrl} did not respond after ${maxRetries} retries.")
+                    }
+                }
+
+                // Print the final container status table in the console log.
                 echo '  → Final container status:'
                 bat "docker ps --filter name=${CONTAINER_NAME} --format \"table {{.Names}}\\t{{.Status}}\\t{{.Ports}}\""
 
                 echo "✅  Health check PASSED. Application is live at ${HEALTH_URL}"
             }
         }
+
 
         // ══════════════════════════════════════════════════════════════════════
         // STAGE 8 — ARCHIVE JAR ARTEFACT
