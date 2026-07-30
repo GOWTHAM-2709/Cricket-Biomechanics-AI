@@ -28,19 +28,18 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3g        # MediaPipe + OpenCV peaks at ~2 GB; 3g gives headroom
-          cpus: "2.0"       # Cap at 2 logical cores — leave room for Java + host OS
+          memory: 3g # MediaPipe + OpenCV peaks at ~2 GB; 3g gives headroom
+          cpus: "2.0" # Cap at 2 logical cores — leave room for Java + host OS
         reservations:
           memory: 512m
     # Health check so java-backend waits until Python is actually ready
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
     restart: unless-stopped
-
 
   # ── Java Spring Boot Backend ───────────────────────────────────────────────
   java-backend:
@@ -50,7 +49,7 @@ services:
     image: cricket-backend:latest
     container_name: java-backend
     ports:
-      - "9090:9090"
+      - "8080:8080"
     volumes:
       - uploads_data:/tmp/uploads
     networks:
@@ -59,6 +58,8 @@ services:
       - AI_SERVICE_URL=http://python-ai:8000
       - UPLOAD_DIR=/tmp/uploads
       - SPRING_SERVLET_MULTIPART_LOCATION=/tmp/uploads
+      # Explicitly set the Spring Boot port via env var (mirrors application.properties)
+      - SERVER_PORT=8080
       # JVM memory: container-aware, max 512 MB
       - JAVA_OPTS=-Xms128m -Xmx512m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
     deploy:
@@ -73,19 +74,17 @@ services:
       python-ai:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/actuator/health"]
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8080/actuator/health" ]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 45s
     restart: unless-stopped
 
-
 # ── Shared volume ────────────────────────────────────────────────────────────
 volumes:
   uploads_data:
     driver: local
-
 
 # ── Internal network ─────────────────────────────────────────────────────────
 networks:

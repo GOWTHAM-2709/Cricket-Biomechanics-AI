@@ -25,12 +25,18 @@ WORKDIR /app
 # Create upload dir inside image (volume mount will overlay at runtime)
 RUN mkdir -p /tmp/uploads
 
-# Environment defaults — docker-compose.yml can override these
+# Environment defaults — docker-compose.yml can override these.
+# SERVER_PORT is the Spring Boot env-var equivalent of server.port.
+# Declaring it here makes the port self-documenting and prevents any
+# external env override from silently changing it.
 ENV UPLOAD_DIR=/tmp/uploads
 ENV SPRING_SERVLET_MULTIPART_LOCATION=/tmp/uploads
+ENV SERVER_PORT=8080
 ENV JAVA_OPTS="-Xms128m -Xmx512m -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
 
-EXPOSE 9090
+# EXPOSE documents the port the container listens on.
+# Must match server.port in application.properties (8080).
+EXPOSE 8080
 
 COPY --from=build /app/target/*.jar app.jar
 
