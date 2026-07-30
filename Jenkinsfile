@@ -2,70 +2,99 @@
 // ║        CRICKET BIOMECHANICS AI — JENKINS CI/CD PIPELINE                     ║
 // ║        Project  : Cricket AI Biomechanics & Speed Analyzer                  ║
 // ║        Stack    : Spring Boot 4 (Java 21) + FastAPI (Python) + Docker       ║
-// ║        Version  : 1.0  (Phase 1 — Build & Test)                             ║
+// ║        Version  : 2.0  (Phase 2 — Full Local CI/CD with Docker Deploy)      ║
+// ║                                                                              ║
+// ║  PIPELINE FLOW                                                               ║
+// ║  ─────────────────────────────────────────────────────────────────────────  ║
+// ║  Stage 1 : Checkout source from GitHub                                      ║
+// ║  Stage 2 : Verify Java 21 + Maven environment                               ║
+// ║  Stage 3 : Maven clean package (compile → JAR)                              ║
+// ║  Stage 4 : Run JUnit tests + publish report                                 ║
+// ║  Stage 5 : Build Docker image (--no-cache)                                  ║
+// ║  Stage 6 : Stop old container → remove → start new container                ║
+// ║  Stage 7 : HTTP health check (retry loop until app is ready)                ║
+// ║  Stage 8 : Archive JAR artefact with fingerprint                            ║
 // ║                                                                              ║
 // ║  PHASE ROADMAP                                                               ║
 // ║  ─────────────────────────────────────────────────────────────────────────  ║
-// ║  Phase 1 (this file) : Checkout → Verify → Build → Test → Archive          ║
-// ║  Phase 2 (next)      : Docker image build & push to DockerHub/ECR           ║
-// ║  Phase 3 (next)      : Docker Compose deploy to AWS EC2 via SSH             ║
-// ║  Phase 4 (future)    : Kubernetes (EKS) deployment                          ║
-// ║  Phase 5 (future)    : Full CD with blue-green / canary rollouts            ║
+// ║  Phase 1 (done) : Checkout → Verify → Build → Test → Archive               ║
+// ║  Phase 2 (this) : + Docker build → Local container deploy → Health check    ║
+// ║  Phase 3 (next) : Push to DockerHub/ECR → Deploy on AWS EC2 via SSH         ║
+// ║  Phase 4 (next) : Kubernetes (EKS) rolling deployment                       ║
+// ║  Phase 5 (future): Blue-Green / canary / Slack notifications                ║
 // ╚══════════════════════════════════════════════════════════════════════════════╝
 
 pipeline {
 
     // ──────────────────────────────────────────────────────────────────────────
-    // AGENT DECLARATION
+    // AGENT
     // ──────────────────────────────────────────────────────────────────────────
-    // 'agent any' → Run this pipeline on ANY available Jenkins node/agent.
-    // For Phase 1 this is fine because we only need Java 21 + Maven, which are
-    // already installed on your local Windows Jenkins instance.
+    // 'agent any' → Run on ANY available Jenkins node.
+    // For Windows local Jenkins this is the Jenkins controller itself.
+    // Docker CLI must be installed and accessible on the PATH of this agent.
     //
-    // FUTURE UPGRADE (Phase 3, Linux EC2):
-    //   agent { label 'ec2-linux' }        ← target a specific labelled agent
-    //   — OR use a Docker agent —
-    //   agent { docker { image 'maven:3.9.6-eclipse-temurin-21' } }
+    // PHASE 3 UPGRADE (Linux EC2):
+    //   agent { label 'ec2-linux' }
+    //   Replace every  bat '...'  with  sh '...'
+    //   Replace  %VARIABLE%  with  $VARIABLE
     // ──────────────────────────────────────────────────────────────────────────
     agent any
 
     // ──────────────────────────────────────────────────────────────────────────
     // ENVIRONMENT VARIABLES
     // ──────────────────────────────────────────────────────────────────────────
-    // Centralise all tuneable values here.
-    // Changing a value once automatically updates every stage that uses it.
+    // Single source of truth. Change a value here and every stage picks it up.
     // ──────────────────────────────────────────────────────────────────────────
     environment {
 
-        // Human-readable application name used in logs and future notifications.
-        APP_NAME    = 'cricket-biomechanics-ai'
+        // ── Application identity ──────────────────────────────────────────────
+        APP_NAME       = 'cricket-biomechanics-ai'
+        APP_VERSION    = '0.0.1-SNAPSHOT'
 
-        // Must match the <version> tag in pom.xml exactly.
-        APP_VERSION = '0.0.1-SNAPSHOT'
+        // JAR filename derived from pom.xml  <artifactId>-<version>.jar
+        JAR_NAME       = "demobowling-analysis-backend-${APP_VERSION}.jar"
 
-        // Derived final JAR filename:
-        //   demobowling-analysis-backend-0.0.1-SNAPSHOT.jar
-        JAR_NAME    = "demobowling-analysis-backend-${APP_VERSION}.jar"
+        // ── Maven wrapper ─────────────────────────────────────────────────────
+        // mvnw.cmd = Windows batch wrapper bundled with the project.
+        // Using the wrapper guarantees the project-pinned Maven version is used.
+        // LINUX equivalent: ./mvnw
+        MAVEN_CMD      = 'mvnw.cmd'
 
-        // ── Maven wrapper commands ────────────────────────────────────────────
-        // Using the project-bundled mvnw wrapper guarantees the exact Maven
-        // version the project was built with, regardless of what is globally
-        // installed on the agent.
-        //
-        // WINDOWS : mvnw.cmd   (Windows batch file wrapper)
-        // LINUX   : ./mvnw     (Shell script wrapper — Phase 3 change)
-        MAVEN_CMD = 'mvnw.cmd'
+        // Suppress AWT errors in headless CI server environments.
+        MAVEN_OPTS     = '-Djava.awt.headless=true'
 
-        // Suppress AWT errors in headless CI environments (no display).
-        MAVEN_OPTS = '-Djava.awt.headless=true'
+        // ── Docker configuration ──────────────────────────────────────────────
+        // All Docker-related constants live here so Stage 5/6/7 stay DRY.
 
-        // ── Future variables (enable in Phase 2 & 3) ─────────────────────────
-        // DOCKERHUB_USER  = 'your-dockerhub-username'
-        // DOCKER_IMG_JAVA = "${DOCKERHUB_USER}/${APP_NAME}-java"
-        // DOCKER_IMG_PY   = "${DOCKERHUB_USER}/${APP_NAME}-python"
-        // DOCKER_TAG      = "${BUILD_NUMBER}"
-        // EC2_HOST        = credentials('ec2-host')
-        // EC2_USER        = 'ubuntu'
+        // The Docker image tag that gets built and deployed.
+        DOCKER_IMAGE   = 'cricket-ai:latest'
+
+        // The container name used in stop / rm / run commands.
+        CONTAINER_NAME = 'cricket-ai'
+
+        // Port inside the container Spring Boot listens on (application.properties).
+        CONTAINER_PORT = '8080'
+
+        // Port exposed on the Windows host machine.
+        HOST_PORT      = '8081'
+
+        // Health check URL — hit this to confirm the app is alive after deploy.
+        // Uses the host port because Jenkins runs on the host, not inside Docker.
+        HEALTH_URL     = "http://localhost:${HOST_PORT}"
+
+        // Maximum number of health-check retry attempts before failing.
+        // Each attempt waits HEALTH_WAIT_SECS seconds between retries.
+        HEALTH_RETRIES = '15'
+
+        // Seconds to wait between each health-check retry.
+        HEALTH_WAIT_SECS = '6'
+
+        // ── Future variables (Phase 3 — DockerHub / ECR push) ─────────────────
+        // DOCKERHUB_CREDS  = credentials('dockerhub-creds')   // Jenkins secret
+        // DOCKERHUB_USER   = 'your-dockerhub-username'
+        // REMOTE_IMAGE     = "${DOCKERHUB_USER}/${APP_NAME}:${BUILD_NUMBER}"
+        // EC2_HOST         = credentials('ec2-host')
+        // EC2_USER         = 'ubuntu'
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -73,24 +102,21 @@ pipeline {
     // ──────────────────────────────────────────────────────────────────────────
     options {
 
-        // Rotate logs & artefacts — keep only the last 10 builds.
-        // Prevents unbounded disk growth on the Jenkins master.
+        // Keep only the last 10 builds + artefacts. Prevents unbounded disk growth.
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '10'))
 
-        // Hard timeout for the entire pipeline.
-        // If the build hangs (e.g., frozen test, stuck download) Jenkins kills
-        // it automatically after 30 minutes.
-        timeout(time: 30, unit: 'MINUTES')
+        // Kill the entire pipeline if it runs longer than 45 minutes.
+        // Phase 2 takes longer than Phase 1 because of Docker build time.
+        timeout(time: 45, unit: 'MINUTES')
 
-        // Prepend every console line with a timestamp — essential for spotting
-        // slow stages and correlating logs with external systems (CloudWatch, etc.)
+        // Prepend a timestamp to every console log line.
+        // Essential for measuring stage durations and correlating failures.
         timestamps()
 
-        // Prevent two builds of the same branch from running simultaneously.
-        // Avoids race conditions on shared workspace directories.
+        // Prevent two builds from running at the same time.
+        // Avoids race conditions where two builds fight over the same
+        // container name or workspace directory.
         disableConcurrentBuilds()
-
-       
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -101,22 +127,15 @@ pipeline {
         // ══════════════════════════════════════════════════════════════════════
         // STAGE 1 — CHECKOUT
         // ══════════════════════════════════════════════════════════════════════
-        // WHY NEEDED:
-        //   The Jenkins workspace is initially empty. This stage pulls the
-        //   exact commit that triggered the build from GitHub into the workspace
-        //   so that every subsequent stage can access the source code.
+        // PURPOSE:
+        //   Jenkins workspaces start empty. This stage pulls the exact Git commit
+        //   that triggered this build so every later stage has source to work with.
         //
-        // HOW 'checkout scm' WORKS:
-        //   'scm' is a Jenkins magic variable that refers to the SCM settings
-        //   you configure in the Pipeline job's "Pipeline script from SCM"
-        //   section (branch, repository URL, credentials, etc.).
-        //   Jenkins automatically records the Git SHA, branch, and author in
-        //   the build metadata — enabling full traceability.
+        //   'checkout scm' reads the repo URL, branch, and credentials from the
+        //   Jenkins job's "Pipeline from SCM" configuration — zero hardcoding.
         //
-        // MULTI-BRANCH BENEFIT:
-        //   In a MultiBranch Pipeline, Jenkins detects every branch and PR in
-        //   GitHub automatically. 'checkout scm' always checks out the correct
-        //   branch without any hardcoding.
+        //   The git log command burns the SHA and author into the console log,
+        //   giving perfect traceability: which code produced which artefact.
         // ══════════════════════════════════════════════════════════════════════
         stage('Stage 1 — Checkout Source Code') {
             steps {
@@ -124,85 +143,73 @@ pipeline {
                 echo '  STAGE 1 : Checking out source code from GitHub'
                 echo '═══════════════════════════════════════════════════════'
 
-                // Pull source from the SCM defined in the Jenkins job config.
                 checkout scm
 
-                // Print the checked-out commit for build traceability.
-                // %% is how you escape % inside a Jenkins bat string.
-                //
-                // WINDOWS:
+                // %% escapes the % character inside a bat string in Jenkins.
                 bat 'git log -1 --format="Commit: %%H | Author: %%an | Date: %%ad | Msg: %%s"'
 
-                // LINUX EC2 (replace the bat line above):
+                // LINUX EC2 equivalent:
                 // sh 'git log -1 --format="Commit: %H | Author: %an | Date: %ad | Msg: %s"'
 
-                echo '✅  Checkout complete.'
+                echo '✅  Source code checked out successfully.'
             }
         }
 
         // ══════════════════════════════════════════════════════════════════════
         // STAGE 2 — VERIFY ENVIRONMENT
         // ══════════════════════════════════════════════════════════════════════
-        // WHY NEEDED:
-        //   Jenkins can run on ANY agent. This stage fails FAST with a clear
-        //   error message if Java 21 or Maven is missing — rather than letting
-        //   it produce a cryptic compile error 10 minutes later.
+        // PURPOSE:
+        //   Fails fast with a meaningful message if Java 21, Maven, or Docker
+        //   CLI are missing from the agent — before wasting time on compilation.
         //
-        //   It also prints version info into the console log, making it easy
-        //   to reproduce a build exactly if something goes wrong weeks later.
+        //   Printing JAVA_HOME catches the silent mistake of Maven picking up a
+        //   different JDK than the one the project requires.
         //
-        // COMMON CATCH:
-        //   If JAVA_HOME is not set on the agent, Maven will silently pick up
-        //   a wrong JDK from the PATH. Printing JAVA_HOME here exposes that.
+        //   'docker info' confirms Docker Desktop is running and the daemon is
+        //   reachable. If Docker is not running, Stage 5 would fail with a
+        //   confusing error; this surfaces it here with a clear label.
         // ══════════════════════════════════════════════════════════════════════
-        stage('Stage 2 — Verify Java & Maven') {
+        stage('Stage 2 — Verify Environment') {
             steps {
                 echo '═══════════════════════════════════════════════════════'
-                echo '  STAGE 2 : Verifying Java 21 and Maven (mvnw)'
+                echo '  STAGE 2 : Verifying Java 21, Maven, and Docker CLI'
                 echo '═══════════════════════════════════════════════════════'
 
-                // WINDOWS bat commands:
                 bat 'java -version'
                 bat 'javac -version'
                 bat "${MAVEN_CMD} --version"
                 bat 'echo JAVA_HOME=%JAVA_HOME%'
-                bat 'echo M2_HOME=%M2_HOME%'
-                bat 'echo PATH=%PATH%'
 
-                // LINUX EC2 equivalents (replace bat → sh):
+                // Verify Docker daemon is running and CLI is on PATH.
+                // 'docker info' exits non-zero if Docker Desktop is not running.
+                bat 'docker info'
+                bat 'docker --version'
+
+                // LINUX EC2 equivalents:
                 // sh 'java -version'
-                // sh 'javac -version'
                 // sh './mvnw --version'
-                // sh 'echo "JAVA_HOME=$JAVA_HOME"'
+                // sh 'docker info'
 
-                echo '✅  Environment verified: Java 21 + Maven ready.'
+                echo '✅  Java 21 + Maven + Docker CLI all verified.'
             }
         }
 
         // ══════════════════════════════════════════════════════════════════════
-        // STAGE 3 — CLEAN & BUILD (Maven package)
+        // STAGE 3 — MAVEN CLEAN & BUILD
         // ══════════════════════════════════════════════════════════════════════
-        // WHY NEEDED:
-        //   This is the core compilation step. Maven cleans the previous build
-        //   output, recompiles all Java sources, processes resources, and
-        //   packages everything into a single executable fat-JAR.
+        // PURPOSE:
+        //   Compile every Java source file and package them into a single
+        //   executable fat-JAR (Spring Boot uber-JAR with embedded Tomcat).
         //
-        // FLAG BREAKDOWN:
-        //   clean        → Deletes target/ so stale .class files never
-        //                  contaminate the new build. ALWAYS use in CI.
-        //   package      → Runs: validate → compile → test-compile → package.
-        //   -DskipTests  → Tests are intentionally skipped HERE because Stage 4
-        //                  runs them separately with a proper JUnit report.
-        //                  Skipping them here gives a fast compile-only check.
-        //   -B           → Batch mode: removes interactive progress bars from
-        //                  Maven output. Keeps the CI log clean and readable.
-        //   -e           → Print full exception stack traces on failure.
-        //                  Without this, Maven often prints a one-line summary
-        //                  that hides the real cause.
+        //   -DskipTests  → Tests run in their own dedicated Stage 4, which
+        //                   captures and publishes a proper JUnit XML report.
+        //                   Skipping them here keeps Stage 3 fast and focused.
+        //   clean        → Always delete target/ first — never compile against
+        //                   stale .class files from a previous build.
+        //   -B           → Batch mode: no ANSI progress bars cluttering CI logs.
+        //   -e           → Full stack-trace on any Maven failure (not just summary).
         //
-        // OUTPUT FILE:
-        //   target/demobowling-analysis-backend-0.0.1-SNAPSHOT.jar  (~50-80 MB)
-        //   This is the runnable Spring Boot fat-JAR.
+        // OUTPUT: target/demobowling-analysis-backend-0.0.1-SNAPSHOT.jar
         // ══════════════════════════════════════════════════════════════════════
         stage('Stage 3 — Maven Clean & Build') {
             steps {
@@ -210,42 +217,36 @@ pipeline {
                 echo '  STAGE 3 : mvnw clean package -DskipTests'
                 echo '═══════════════════════════════════════════════════════'
 
-                // WINDOWS:
                 bat "${MAVEN_CMD} clean package -DskipTests -B -e"
 
                 // LINUX EC2:
                 // sh "./mvnw clean package -DskipTests -B -e"
 
-                // Verify the JAR file was actually produced.
-                // 'if not exist ... exit 1' causes the stage to fail with a
-                // meaningful message instead of a silent pass.
-                bat "if not exist target\\${JAR_NAME} (echo ❌ JAR not found at target\\${JAR_NAME} && exit /b 1)"
+                // Hard-fail if the JAR was not produced.
+                // Without this check a broken Maven build could silently fall
+                // through to the Docker stage, which would then fail on COPY.
+                bat "if not exist target\\${JAR_NAME} (echo ❌ JAR missing: target\\${JAR_NAME} && exit /b 1)"
 
-                echo "✅  JAR built successfully: ${JAR_NAME}"
+                echo "✅  JAR built: ${JAR_NAME}"
             }
         }
 
         // ══════════════════════════════════════════════════════════════════════
         // STAGE 4 — RUN TESTS
         // ══════════════════════════════════════════════════════════════════════
-        // WHY NEEDED:
-        //   Tests are the quality gate of every CI/CD pipeline. This stage:
-        //     • Runs all JUnit tests in src/test/java/
-        //     • Publishes test results to Jenkins' Test Results panel
-        //     • Shows a trend chart across builds (pass/fail/skip history)
-        //     • Marks the build UNSTABLE (yellow) if tests fail, rather than
-        //       FAILURE — meaning the JAR is still archived for inspection.
+        // PURPOSE:
+        //   The quality gate. No code reaches a Docker container without passing
+        //   every JUnit test.
         //
-        // WHY SEPARATE FROM STAGE 3:
-        //   • Independent timing visibility in the Stage View.
-        //   • Tests can be skipped easily in emergencies by commenting out
-        //     this single stage (never skip them in production!).
-        //   • The 'post { always }' block ensures test reports are published
-        //     even when the tests themselves fail.
+        //   The 'post { always }' block publishes the Surefire XML report even
+        //   when some tests fail. Without 'always', a failed test aborts the
+        //   stage before the report is written, and the Jenkins Test Results tab
+        //   shows nothing — hiding the root cause.
         //
-        // SUREFIRE REPORT:
-        //   Maven Surefire plugin writes XML reports to target/surefire-reports/.
-        //   Jenkins' junit() step reads these and builds the interactive report.
+        //   Build state on test failure:
+        //     • UNSTABLE (yellow) — tests ran but some failed.
+        //     • The pipeline does NOT continue to Docker stages when UNSTABLE
+        //       because subsequent stages check currentBuild.result.
         // ══════════════════════════════════════════════════════════════════════
         stage('Stage 4 — Run Tests') {
             steps {
@@ -253,7 +254,6 @@ pipeline {
                 echo '  STAGE 4 : Running JUnit / Spring Boot tests'
                 echo '═══════════════════════════════════════════════════════'
 
-                // WINDOWS:
                 bat "${MAVEN_CMD} test -B -e"
 
                 // LINUX EC2:
@@ -261,57 +261,287 @@ pipeline {
             }
 
             post {
-                // 'always' guarantees the test report is published even if
-                // some tests failed. Without this, a failed test would abort
-                // the stage before the report is generated.
+                // Publish JUnit XML report regardless of pass / fail.
                 always {
                     junit allowEmptyResults: true,
                           testResults: 'target/surefire-reports/*.xml'
 
-                    echo '✅  Test report published to Jenkins Test Results tab.'
+                    echo '✅  JUnit report published → Jenkins Test Results tab.'
                 }
-
                 success {
-                    echo '✅  All tests passed.'
+                    echo '✅  All tests passed. Proceeding to Docker build.'
                 }
-
                 failure {
-                    echo '❌  One or more tests FAILED. Review the Test Results tab.'
+                    echo '❌  Test failures detected. Docker stages will be skipped.'
                 }
             }
         }
 
         // ══════════════════════════════════════════════════════════════════════
-        // STAGE 5 — ARCHIVE JAR ARTEFACT
+        // STAGE 5 — BUILD DOCKER IMAGE
         // ══════════════════════════════════════════════════════════════════════
-        // WHY NEEDED:
-        //   Without archiving, the JAR only exists inside the temporary
-        //   workspace directory and is deleted when the workspace is cleaned.
+        // PURPOSE:
+        //   Build a fresh Docker image from the Dockerfile in the project root.
         //
-        //   archiveArtifacts saves a copy inside Jenkins' own storage so it:
-        //     • Can be downloaded from the Jenkins Build page by any team member.
-        //     • Can be consumed by downstream Jenkins jobs (e.g., Docker build).
-        //     • Provides a rollback artefact: if a new deployment breaks
-        //       production you can re-deploy a previous known-good build's JAR.
+        //   WHY --no-cache:
+        //     Without --no-cache Docker reuses layer caches. If application.properties
+        //     or any resource file changed but pom.xml did not, Docker's cache
+        //     would serve the OLD layer and the new config would NOT be inside
+        //     the image. --no-cache guarantees the freshly compiled JAR is always
+        //     baked into the image. The trade-off is a longer build time.
         //
-        // fingerprint: true
-        //   Jenkins computes an MD5 hash of the JAR and records it.
-        //   This creates a chain: build #N → JAR hash → downstream jobs.
-        //   You can click the "fingerprint" in any build to see everywhere
-        //   the same JAR was used.
+        //   WHY tagged 'cricket-ai:latest':
+        //     Stage 6 references this exact tag when starting the container.
+        //     'latest' is fine for local CI — in Phase 3 we'll add a versioned
+        //     tag (cricket-ai:${BUILD_NUMBER}) for immutable DockerHub pushes.
         //
-        // allowEmptyArchive: false
-        //   Fail the pipeline if the JAR pattern matches nothing.
-        //   Ensures you never silently archive an empty build.
-        //
-        // INDUSTRY NOTE:
-        //   Production teams also push artefacts to Nexus / Artifactory / AWS S3
-        //   here. We will add 'mvn deploy' in a later phase.
+        //   The stage fails immediately if 'docker build' exits non-zero.
+        //   There is no risk of deploying a broken image.
         // ══════════════════════════════════════════════════════════════════════
-        stage('Stage 5 — Archive JAR Artefact') {
+        stage('Stage 5 — Build Docker Image') {
+            // Skip this stage if an earlier stage marked the build UNSTABLE
+            // (e.g., test failures). We never deploy from a broken build.
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
             steps {
                 echo '═══════════════════════════════════════════════════════'
-                echo "  STAGE 5 : Archiving ${JAR_NAME}"
+                echo "  STAGE 5 : Building Docker image → ${DOCKER_IMAGE}"
+                echo '═══════════════════════════════════════════════════════'
+
+                // --no-cache  : Never reuse layer cache — always bake the latest JAR.
+                // -t          : Tag the image with the name defined in environment{}.
+                // .           : Build context is the project root (where Dockerfile lives).
+                //
+                // WINDOWS bat:
+                bat "docker build --no-cache -t ${DOCKER_IMAGE} ."
+
+                // LINUX EC2 equivalent:
+                // sh "docker build --no-cache -t ${DOCKER_IMAGE} ."
+
+                // Confirm the image now exists in the local Docker daemon.
+                bat "docker image inspect ${DOCKER_IMAGE} > nul 2>&1 && echo ✅ Image verified: ${DOCKER_IMAGE} || (echo ❌ Image not found after build && exit /b 1)"
+
+                echo "✅  Docker image built and verified: ${DOCKER_IMAGE}"
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // STAGE 6 — DEPLOY DOCKER CONTAINER
+        // ══════════════════════════════════════════════════════════════════════
+        // PURPOSE:
+        //   Replace the currently running container with a fresh one from the
+        //   image built in Stage 5. This is the actual "deployment" step.
+        //
+        //   STEP-BY-STEP:
+        //     1. docker stop   → Gracefully send SIGTERM to the running container.
+        //                        The '|| echo ...' suffix prevents the pipeline
+        //                        from failing if no container is running (first run).
+        //     2. docker rm     → Remove the stopped container record so 'docker run'
+        //                        can reuse the same --name.
+        //                        Safe to call even if stop failed (container gone).
+        //     3. docker rmi    → Delete the previous image to free disk space.
+        //                        This is optional but prevents image accumulation.
+        //                        'cricket-ai:latest' will still exist because
+        //                        Stage 5 just built the new one with the same tag —
+        //                        Docker retags automatically.
+        //                        NOTE: we remove the IMAGE first, then run with
+        //                        the newly built one that already exists.
+        //     4. docker run -d → Start the new container in detached mode
+        //                        (background). Jenkins does NOT wait for the app
+        //                        to be ready here — that is Stage 7's job.
+        //
+        //   PORT MAPPING:
+        //     -p 8081:8080 → Host:Container
+        //     Browser/Jenkins hits localhost:8081 → Docker routes to container:8080
+        //     → Spring Boot (server.port=8080) handles the request.
+        //
+        //   --restart unless-stopped:
+        //     If Docker Desktop restarts (e.g., after a Windows reboot) the
+        //     container will automatically come back up without manual intervention.
+        // ══════════════════════════════════════════════════════════════════════
+        stage('Stage 6 — Deploy Docker Container') {
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                echo '═══════════════════════════════════════════════════════'
+                echo "  STAGE 6 : Deploying container → ${CONTAINER_NAME}"
+                echo "            Image        : ${DOCKER_IMAGE}"
+                echo "            Port mapping : ${HOST_PORT}:${CONTAINER_PORT}"
+                echo '═══════════════════════════════════════════════════════'
+
+                // ── Step 6a: Stop the running container ───────────────────────
+                // '|| echo' absorbs the error exit code when no container exists.
+                // Without this, the pipeline would FAIL on the very first run.
+                echo '  → Step 6a: Stopping existing container (if running)...'
+                bat "docker stop ${CONTAINER_NAME} || echo No container named ${CONTAINER_NAME} to stop."
+
+                // ── Step 6b: Remove the stopped container record ──────────────
+                // Must remove before 'docker run --name' can reuse the same name.
+                echo '  → Step 6b: Removing old container record (if present)...'
+                bat "docker rm ${CONTAINER_NAME} || echo No container named ${CONTAINER_NAME} to remove."
+
+                // ── Step 6c: Remove the old image to reclaim disk space ───────
+                // The new image already exists (built in Stage 5).
+                // '|| echo' absorbs error when image does not exist (first run).
+                echo '  → Step 6c: Pruning old dangling image layers...'
+                bat "docker image prune -f || echo No dangling images to prune."
+
+                // ── Step 6d: Start the new container ─────────────────────────
+                // -d                   : Detached — run in background.
+                // -p HOST:CONTAINER    : Port mapping.
+                // --name               : Named container for easy management.
+                // --restart unless-stopped : Auto-restart on Docker daemon restart.
+                // The caret (^) is the Windows CMD line-continuation character.
+                echo '  → Step 6d: Starting new container from latest image...'
+                bat "docker run -d ^" +
+                    " -p ${HOST_PORT}:${CONTAINER_PORT} ^" +
+                    " --name ${CONTAINER_NAME} ^" +
+                    " --restart unless-stopped ^" +
+                    " ${DOCKER_IMAGE}"
+
+                // LINUX EC2 equivalent (\ is the line-continuation in bash):
+                // sh """
+                //   docker stop ${CONTAINER_NAME}  || true
+                //   docker rm   ${CONTAINER_NAME}  || true
+                //   docker image prune -f          || true
+                //   docker run -d \\
+                //     -p ${HOST_PORT}:${CONTAINER_PORT} \\
+                //     --name ${CONTAINER_NAME} \\
+                //     --restart unless-stopped \\
+                //     ${DOCKER_IMAGE}
+                // """
+
+                echo "✅  Container started: ${CONTAINER_NAME}"
+                echo "    Mapped: localhost:${HOST_PORT} → container:${CONTAINER_PORT}"
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // STAGE 7 — HTTP HEALTH CHECK
+        // ══════════════════════════════════════════════════════════════════════
+        // PURPOSE:
+        //   The build should only be marked SUCCESS when the application is
+        //   actually serving HTTP traffic — not just because the container
+        //   started. Spring Boot takes 3-8 seconds to initialise Tomcat, load
+        //   the application context, and register routes. This stage bridges
+        //   that gap with a retry loop.
+        //
+        //   ALGORITHM:
+        //     1. Try  curl --fail localhost:8081  (exits 0 on 2xx/3xx response).
+        //     2. If it fails, wait HEALTH_WAIT_SECS seconds and retry.
+        //     3. After HEALTH_RETRIES attempts, give up and fail the stage.
+        //
+        //   WHY PowerShell for the retry loop:
+        //     Windows CMD batch does not have a native sleep command, and the
+        //     'ping -n' hack is fragile. PowerShell's  Start-Sleep  is clean,
+        //     reliable, and available on any modern Windows system.
+        //     The bat step launches cmd.exe which can invoke powershell.exe.
+        //
+        //   WHAT COUNTS AS HEALTHY:
+        //     Any HTTP 2xx or 3xx from localhost:8081 (the index.html welcome page).
+        //     We intentionally avoid requiring /actuator/health because it is not
+        //     enabled in this project's pom.xml. If you add spring-boot-actuator
+        //     later, change HEALTH_URL to http://localhost:8081/actuator/health.
+        //
+        //   TIMEOUT SAFETY:
+        //     The outer pipeline timeout(45 MINUTES) prevents an infinite loop
+        //     if something goes catastrophically wrong.
+        // ══════════════════════════════════════════════════════════════════════
+        stage('Stage 7 — Health Check') {
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                echo '═══════════════════════════════════════════════════════'
+                echo "  STAGE 7 : Health check → ${HEALTH_URL}"
+                echo "            Max retries : ${HEALTH_RETRIES}"
+                echo "            Wait between: ${HEALTH_WAIT_SECS}s"
+                echo '═══════════════════════════════════════════════════════'
+
+                // Give Spring Boot a head start before the first probe.
+                // This avoids wasting the first few retry slots on connection
+                // refused while Tomcat is still binding the port.
+                echo '  → Waiting 10 seconds for Spring Boot to initialise...'
+                bat 'powershell -Command "Start-Sleep -Seconds 10"'
+
+                // ── Retry loop implemented as a PowerShell script ─────────────
+                // The entire block is a single bat step containing an inline
+                // PowerShell one-liner passed via -Command.
+                //
+                // Logic (plain English):
+                //   For i = 1 to HEALTH_RETRIES:
+                //     Try curl. If exit code is 0 → healthy, exit loop with 0.
+                //     Otherwise print attempt number, sleep, try again.
+                //   If all retries exhausted → exit 1 → Jenkins marks FAILURE.
+                //
+                // curl flags used:
+                //   --fail        : Exit code 1 on HTTP 4xx/5xx (not just on errors).
+                //   --silent      : Suppress download progress bars.
+                //   --max-time 5  : Each individual request times out after 5 seconds.
+                //                   Prevents one hung request consuming a full retry slot.
+                //   --output nul  : Discard response body (we only care about exit code).
+                //
+                // NOTE: curl is available on Windows 10 / Windows Server 2019+ by default.
+                // ─────────────────────────────────────────────────────────────────
+                bat """
+                    powershell -NoProfile -NonInteractive -Command ^
+                    "$retries = ${HEALTH_RETRIES}; ^
+                     $wait    = ${HEALTH_WAIT_SECS}; ^
+                     $url     = '${HEALTH_URL}'; ^
+                     $healthy = $false; ^
+                     for ($i = 1; $i -le $retries; $i++) { ^
+                         Write-Host ('[Health Check] Attempt ' + $i + ' of ' + $retries + ' → ' + $url); ^
+                         $result = & curl --fail --silent --max-time 5 --output NUL $url 2>&1; ^
+                         if ($LASTEXITCODE -eq 0) { ^
+                             Write-Host '[Health Check] ✅ Application is UP and healthy!'; ^
+                             $healthy = $true; ^
+                             break ^
+                         } ^
+                         Write-Host ('[Health Check] ⏳ Not ready yet. Waiting ' + $wait + 's...'); ^
+                         Start-Sleep -Seconds $wait ^
+                     }; ^
+                     if (-not $healthy) { ^
+                         Write-Host '[Health Check] ❌ Application did not respond after all retries.'; ^
+                         Write-Host '              Check: docker logs ${CONTAINER_NAME}'; ^
+                         exit 1 ^
+                     }"
+                """
+
+                // Print final container state for the console log.
+                echo '  → Final container status:'
+                bat "docker ps --filter name=${CONTAINER_NAME} --format \"table {{.Names}}\\t{{.Status}}\\t{{.Ports}}\""
+
+                echo "✅  Health check PASSED. Application is live at ${HEALTH_URL}"
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // STAGE 8 — ARCHIVE JAR ARTEFACT
+        // ══════════════════════════════════════════════════════════════════════
+        // PURPOSE:
+        //   Save a permanent copy of the deployable JAR in Jenkins' own storage.
+        //
+        //   This enables:
+        //     • Downloading the exact JAR that is running in the container.
+        //     • Rolling back: redeploy a previous build's JAR by re-running it.
+        //     • Traceability: fingerprint links this JAR to every build that used it.
+        //
+        //   Archive happens AFTER health check so only a JAR that produced a
+        //   healthy container gets archived. Failed deployments are not preserved.
+        //
+        //   fingerprint: true
+        //     Jenkins hashes the JAR (MD5) and records the hash in build metadata.
+        //     Clickable in the Jenkins UI: "which builds used this exact file?"
+        // ══════════════════════════════════════════════════════════════════════
+        stage('Stage 8 — Archive JAR Artefact') {
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                echo '═══════════════════════════════════════════════════════'
+                echo "  STAGE 8 : Archiving ${JAR_NAME}"
                 echo '═══════════════════════════════════════════════════════'
 
                 archiveArtifacts artifacts: "target/${JAR_NAME}",
@@ -319,75 +549,69 @@ pipeline {
                                  allowEmptyArchive: false
 
                 echo "✅  Artefact archived: ${JAR_NAME}"
-                echo "    → Access: Jenkins → Build #${BUILD_NUMBER} → Artefacts"
+                echo "    Download: Jenkins → Build #${BUILD_NUMBER} → Artefacts"
             }
         }
 
         // ══════════════════════════════════════════════════════════════════════
-        // ── PHASE 2 STUB: Docker Build & Push ─────────────────────────────────
-        // Uncomment this entire stage when Phase 2 work begins.
+        // ── PHASE 3 STUB: DockerHub Push + AWS EC2 SSH Deploy ─────────────────
+        // Uncomment the entire block when Phase 3 work begins.
         // ══════════════════════════════════════════════════════════════════════
         /*
-        stage('Stage 6 — Build Docker Images') {
+        stage('Stage 9 — Push Image to DockerHub') {
             steps {
-                echo '  STAGE 6 : Building Java + Python Docker images'
-                // Uses docker-compose.yml to build both services consistently.
-                // LINUX: sh  'docker compose build --no-cache'
-                // WINDOWS: bat 'docker compose build --no-cache'
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS')]) {
+
+                    // Tag locally-built image with remote name before pushing.
+                    bat "docker tag ${DOCKER_IMAGE} %DOCKER_USER%/${APP_NAME}:${BUILD_NUMBER}"
+                    bat "docker tag ${DOCKER_IMAGE} %DOCKER_USER%/${APP_NAME}:latest"
+                    bat "echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin"
+                    bat "docker push %DOCKER_USER%/${APP_NAME}:${BUILD_NUMBER}"
+                    bat "docker push %DOCKER_USER%/${APP_NAME}:latest"
+                }
+                echo "✅  Image pushed to DockerHub: ${APP_NAME}:${BUILD_NUMBER}"
             }
         }
 
-        stage('Stage 7 — Push to DockerHub / ECR') {
+        stage('Stage 10 — Deploy to AWS EC2') {
             steps {
-                echo '  STAGE 7 : Pushing images to container registry'
-                // withCredentials([usernamePassword(
-                //     credentialsId: 'dockerhub-creds',
-                //     usernameVariable: 'DOCKER_USER',
-                //     passwordVariable: 'DOCKER_PASS')]) {
-                //   sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-                //   sh "docker push ${DOCKER_IMG_JAVA}:${DOCKER_TAG}"
-                //   sh "docker push ${DOCKER_IMG_PY}:${DOCKER_TAG}"
-                // }
+                sshagent(['ec2-ssh-key']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                          docker pull ${DOCKER_IMAGE}
+                          docker stop ${CONTAINER_NAME}  || true
+                          docker rm   ${CONTAINER_NAME}  || true
+                          docker run -d -p ${HOST_PORT}:${CONTAINER_PORT} \\
+                            --name ${CONTAINER_NAME} \\
+                            --restart unless-stopped \\
+                            ${DOCKER_IMAGE}
+                        '
+                    """
+                }
+                echo "✅  Deployed to EC2: ${EC2_HOST}:${HOST_PORT}"
+            }
+        }
+
+        stage('Stage 11 — EC2 Smoke Test') {
+            steps {
+                sh "curl -f http://${EC2_HOST}:${HOST_PORT} || exit 1"
+                echo "✅  EC2 smoke test passed."
             }
         }
         */
 
-        // ══════════════════════════════════════════════════════════════════════
-        // ── PHASE 3 STUB: AWS EC2 Deployment ──────────────────────────────────
-        // ══════════════════════════════════════════════════════════════════════
+        // ── PHASE 4 STUB: Kubernetes (EKS) ─────────────────────────────────
         /*
-        stage('Stage 8 — Deploy to AWS EC2') {
+        stage('Stage 12 — EKS Rolling Deploy') {
             steps {
-                echo '  STAGE 8 : SSH into EC2 and docker compose up'
-                // sshagent(['ec2-ssh-key']) {
-                //   sh """
-                //     ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
-                //       cd /home/ubuntu/cricket-ai &&
-                //       docker compose pull &&
-                //       docker compose up -d --remove-orphans
-                //     '
-                //   """
-                // }
-            }
-        }
-
-        stage('Stage 9 — Smoke Test') {
-            steps {
-                echo '  STAGE 9 : Verifying deployment health endpoint'
-                // sh "curl -f http://${EC2_HOST}:9090/actuator/health || exit 1"
-            }
-        }
-        */
-
-        // ══════════════════════════════════════════════════════════════════════
-        // ── PHASE 4 STUB: Kubernetes (EKS) ────────────────────────────────────
-        // ══════════════════════════════════════════════════════════════════════
-        /*
-        stage('Stage 10 — Deploy to EKS') {
-            steps {
-                echo '  STAGE 10 : Rolling update on EKS cluster'
-                // sh "kubectl set image deployment/cricket-backend cricket-backend=${DOCKER_IMG_JAVA}:${DOCKER_TAG} -n production"
-                // sh "kubectl rollout status deployment/cricket-backend -n production"
+                sh """
+                    kubectl set image deployment/${APP_NAME} \\
+                        ${APP_NAME}=${DOCKER_IMAGE} -n production
+                    kubectl rollout status deployment/${APP_NAME} -n production
+                """
             }
         }
         */
@@ -397,58 +621,70 @@ pipeline {
     // ──────────────────────────────────────────────────────────────────────────
     // POST-PIPELINE ACTIONS
     // ──────────────────────────────────────────────────────────────────────────
-    // These blocks run AFTER all stages, regardless of the pipeline's result.
-    // Think of them as a finally{} block in Java — they always execute.
+    // These blocks always execute after all stages — like a Java finally{} block.
+    // Order of evaluation: success | failure | unstable | aborted → then always.
     // ──────────────────────────────────────────────────────────────────────────
     post {
 
         success {
             echo ''
-            echo '╔════════════════════════════════════════════════════╗'
-            echo '║  ✅  PIPELINE COMPLETED SUCCESSFULLY               ║'
-            echo "║  App     : ${APP_NAME}                             ║"
-            echo "║  Build   : #${BUILD_NUMBER}                        ║"
-            echo "║  JAR     : ${JAR_NAME}                             ║"
-            echo '╚════════════════════════════════════════════════════╝'
+            echo '╔══════════════════════════════════════════════════════════╗'
+            echo '║  ✅  PIPELINE COMPLETED SUCCESSFULLY                     ║'
+            echo "║  App       : ${APP_NAME}                                 ║"
+            echo "║  Build     : #${BUILD_NUMBER}                            ║"
+            echo "║  Image     : ${DOCKER_IMAGE}                             ║"
+            echo "║  Container : ${CONTAINER_NAME}                           ║"
+            echo "║  Live URL  : ${HEALTH_URL}                               ║"
+            echo '╚══════════════════════════════════════════════════════════╝'
 
-            // ── Phase 2: Uncomment to send Slack success notification ──────
+            // PHASE 3: Uncomment to send Slack success notification.
             // slackSend channel: '#cricket-ai-ci',
             //             color: 'good',
-            //             message: "✅ Build #${BUILD_NUMBER} passed — ${APP_NAME} (${BRANCH_NAME})\n${BUILD_URL}"
+            //             message: "✅ Build #${BUILD_NUMBER} deployed — ${APP_NAME}\nURL: ${HEALTH_URL}\n${BUILD_URL}"
         }
 
         failure {
             echo ''
-            echo '╔════════════════════════════════════════════════════╗'
-            echo '║  ❌  PIPELINE FAILED                               ║'
-            echo "║  Build   : #${BUILD_NUMBER}                        ║"
-            echo '║  Check the Console Output for the root cause.      ║'
-            echo '╚════════════════════════════════════════════════════╝'
+            echo '╔══════════════════════════════════════════════════════════╗'
+            echo '║  ❌  PIPELINE FAILED                                      ║'
+            echo "║  Build     : #${BUILD_NUMBER}                            ║"
+            echo '║  Action    : Check Console Output for the root cause.    ║'
+            echo "║  Container : docker logs ${CONTAINER_NAME}               ║"
+            echo '╚══════════════════════════════════════════════════════════╝'
 
-            // ── Phase 2: Uncomment to send email/Slack failure alert ───────
+            // On failure, print the last 50 lines of container logs to help
+            // diagnose whether the failure was a Spring Boot startup crash.
+            // '|| echo' prevents this from masking the original failure exit code.
+            bat "docker logs --tail=50 ${CONTAINER_NAME} || echo (container not running)"
+
+            // PHASE 3: Uncomment to send email/Slack failure alert.
             // emailext subject: "❌ Jenkins FAILED — ${APP_NAME} #${BUILD_NUMBER}",
-            //          body: "Pipeline failed. See: ${BUILD_URL}console",
+            //          body: "Pipeline failed.\nSee: ${BUILD_URL}console",
             //          to: 'your-email@example.com'
         }
 
         unstable {
-            echo '⚠️   PIPELINE UNSTABLE — some tests failed.'
-            echo '     Review the Test Results tab for failing test cases.'
+            echo '⚠️   PIPELINE UNSTABLE — test failures detected.'
+            echo '     Docker stages were skipped to protect the running container.'
+            echo '     Fix the failing tests and rebuild.'
         }
 
         aborted {
-            echo '⏹️   PIPELINE ABORTED manually or by timeout.'
+            echo '⏹️   PIPELINE ABORTED — manually cancelled or timed out.'
+            echo "     Container state: run 'docker ps -a' to inspect."
         }
 
         always {
-            echo "─── Pipeline finished. Total duration: ${currentBuild.durationString} ───"
+            echo "─── Pipeline finished | Duration: ${currentBuild.durationString} ───"
 
-            // Clean the workspace after the build to free disk space.
-            // Jenkins already stored the JAR via archiveArtifacts, so this
-            // does NOT delete the saved artefact — only the local workspace copy.
+            // Clean the Jenkins workspace to free disk space.
+            // archiveArtifacts has already saved the JAR to Jenkins storage,
+            // so cleaning here does NOT lose any build output.
             //
-            // Comment out cleanWs() if you need to inspect workspace files
-            // after a failed build for debugging purposes.
+            // The running Docker container is NOT affected by cleanWs().
+            // It continues running independently of the Jenkins workspace.
+            //
+            // Comment this out if you need to inspect workspace files post-failure.
             cleanWs()
         }
     }
