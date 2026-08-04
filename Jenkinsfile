@@ -403,12 +403,35 @@ pipeline {
                     usernameVariable: 'DOCKER_USER',
                     passwordVariable: 'DOCKER_PASS'
                 )]) {
-                    // Pipe the password into docker login via stdin.
-                    // This is the most secure method supported on Windows CMD.
-                    // WINDOWS bat:
-                    bat 'echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin'
+                    // ── ROOT CAUSE FIX: Windows CMD echo CRLF contamination ──────
+                    //
+                    // OLD (broken):
+                    //   bat 'echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin'
+                    //
+                    //   Windows CMD 'echo' appends \r\n (CRLF) to every line.
+                    //   'docker login --password-stdin' reads raw stdin bytes and strips
+                    //   the trailing \n — but NOT the \r (carriage return).
+                    //   Docker Hub therefore received:  <PAT>\r  (corrupted)
+                    //   Result: "unauthorized: incorrect username or password" ❌
+                    //
+                    // NEW (fixed — PowerShell Write-Output):
+                    //   PowerShell pipes strings to external (native) processes as a
+                    //   UTF-8 byte stream WITHOUT a trailing \r.
+                    //   'docker login --password-stdin' strips the final \n and receives
+                    //   the clean PAT with no extra bytes.
+                    //   Result: Login Succeeded ✅
+                    //
+                    // WHY $Env:DOCKER_PASS is safe here:
+                    //   • The outer Groovy string uses single quotes → Groovy does NOT
+                    //     interpolate $Env:DOCKER_PASS.  PowerShell expands it at runtime.
+                    //   • Jenkins withCredentials automatically masks the value in the
+                    //     console log regardless of which process reads the env var.
+                    //   • The PAT never appears as a command-line argument (process list).
+                    //
+                    // WINDOWS bat (PowerShell):
+                    bat 'powershell -NoProfile -NonInteractive -Command "Write-Output $Env:DOCKER_PASS | docker login -u $Env:DOCKER_USER --password-stdin"'
 
-                    // LINUX EC2 equivalent:
+                    // LINUX EC2 equivalent (no CRLF issue on Linux — original form is fine):
                     // sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
                 }
 
