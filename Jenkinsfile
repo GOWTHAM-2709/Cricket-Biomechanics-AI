@@ -98,6 +98,19 @@ pipeline {
         // Seconds to wait between each health-check retry.
         HEALTH_WAIT_SECS = '6'
 
+        // ── Python AI Microservice ────────────────────────────────────────────
+        // Container name and image for the FastAPI Python AI service.
+        // These must be kept in sync with Dockerfile.python and docker-compose.yml.
+        PYTHON_AI_CONTAINER = 'python-ai'
+        PYTHON_AI_IMAGE     = 'cricket-ai-python:latest'
+
+        // The URL Spring Boot uses to reach the Python AI service.
+        // When both run as plain 'docker run' containers (not docker-compose),
+        // host.docker.internal resolves to the Windows host machine IP from
+        // inside any Docker container — allowing the Spring Boot container to
+        // reach the Python container via the host-published port 8000.
+        AI_SERVICE_URL = 'http://host.docker.internal:8000'
+
         // ── Future variables (Phase 4 — AWS EC2 SSH deploy) ───────────────────
         // EC2_HOST         = credentials('ec2-host')
         // EC2_USER         = 'ubuntu'
@@ -565,33 +578,102 @@ pipeline {
                 echo '  → Step 8c: Pruning old dangling image layers...'
                 bat "docker image prune -f || echo No dangling images to prune."
 
-                // ── Step 8d: Start the new container ─────────────────────────
-                // -d                   : Detached — run in background.
-                // -p HOST:CONTAINER    : Port mapping.
-                // --name               : Named container for easy management.
-                // --restart unless-stopped : Auto-restart on Docker daemon restart.
-                // The caret (^) is the Windows CMD line-continuation character.
-                echo '  → Step 8d: Starting new container from latest image...'
+                // ── Step 8d: Start the Python AI service container ────────────
+                //
+                // ROOT CAUSE FIX — why the AI service was unreachable:
+                //   The Spring Boot container called http://localhost:8000/...
+                //   Inside a Docker container, 'localhost' refers to the container
+                //   itself — NOT the host machine and NOT other containers.
+                //   The Python AI service was never started by Jenkins, and even if
+                //   it were, localhost would still be the wrong address.
+                //
+                // SOLUTION — two parts:
+                //   1. Jenkins explicitly builds and starts the python-ai container.
+                //   2. The Spring Boot container receives AI_SERVICE_URL set to
+                //      http://host.docker.internal:8000 — a special DNS name that
+                //      Docker for Windows automatically resolves to the host machine
+                //      IP (gateway), allowing any container to reach any service
+                //      published on the host's port 8000.
+                //
+                // NETWORKING DIAGRAM:
+                //   [Browser] → localhost:8081
+                //       → [cricket-ai container : 8080]
+                //             → AI_SERVICE_URL = http://host.docker.internal:8000
+                //                   → [host machine port 8000]
+                //                         → [python-ai container : 8000]
+                //
+                // Stop + remove the old Python AI container (first run: no-op).
+                echo '  → Step 8d-i: Stopping old Python AI container (if running)...'
+                bat "docker stop ${PYTHON_AI_CONTAINER} || echo No container named ${PYTHON_AI_CONTAINER} to stop."
+                bat "docker rm   ${PYTHON_AI_CONTAINER} || echo No container named ${PYTHON_AI_CONTAINER} to remove."
+
+                // Build the Python AI image from Dockerfile.python.
+                // --no-cache ensures the latest main.py and analysis scripts are used.
+                echo '  → Step 8d-ii: Building Python AI image from Dockerfile.python...'
+                bat "docker build --no-cache -f Dockerfile.python -t ${PYTHON_AI_IMAGE} ."
+
+                // Start the Python AI container.
+                // -p 8000:8000  : Publishes port 8000 on the host so host.docker.internal
+                //                 can route traffic from the Spring Boot container to it.
+                // PYTHONUNBUFFERED=1 : Ensures FastAPI/uvicorn logs appear immediately.
+                echo '  → Step 8d-iii: Starting Python AI container on port 8000...'
+                bat "docker run -d ^" +
+                    " -p 8000:8000 ^" +
+                    " --name ${PYTHON_AI_CONTAINER} ^" +
+                    " -v cricket_uploads:/tmp/uploads ^" +
+                    " -e PYTHONUNBUFFERED=1 ^" +
+                    " --restart unless-stopped ^" +
+                    " ${PYTHON_AI_IMAGE}"
+
+                // Wait for uvicorn to bind port 8000 before starting Spring Boot.
+                // Without this, Spring Boot might start and fail its first health-check
+                // call to the Python service before uvicorn is ready.
+                echo '  → Step 8d-iv: Waiting 15s for uvicorn to start...'
+                bat 'powershell -Command "Start-Sleep -Seconds 15"'
+
+                // ── Step 8e: Start the Spring Boot container ──────────────────
+                // -e AI_SERVICE_URL : Overrides the localhost default hardcoded in
+                //                     VideoUploadController.java line 56.
+                //                     host.docker.internal resolves to the host
+                //                     machine IP from inside any Docker container.
+                // -v cricket_uploads: Shared volume so both containers access the
+                //                     same /tmp/uploads directory — Spring Boot writes
+                //                     the uploaded video, Python reads it by path.
+                echo '  → Step 8e: Starting Spring Boot container...'
                 bat "docker run -d ^" +
                     " -p ${HOST_PORT}:${CONTAINER_PORT} ^" +
                     " --name ${CONTAINER_NAME} ^" +
+                    " -e AI_SERVICE_URL=${AI_SERVICE_URL} ^" +
+                    " -e UPLOAD_DIR=/tmp/uploads ^" +
+                    " -e SPRING_SERVLET_MULTIPART_LOCATION=/tmp/uploads ^" +
+                    " -e SERVER_PORT=${CONTAINER_PORT} ^" +
+                    " -v cricket_uploads:/tmp/uploads ^" +
                     " --restart unless-stopped ^" +
                     " ${DOCKER_IMAGE}"
 
-                // LINUX EC2 equivalent (\ is the line-continuation in bash):
+                // LINUX EC2 equivalent:
                 // sh """
-                //   docker stop ${CONTAINER_NAME}  || true
-                //   docker rm   ${CONTAINER_NAME}  || true
-                //   docker image prune -f          || true
-                //   docker run -d \\
-                //     -p ${HOST_PORT}:${CONTAINER_PORT} \\
+                //   docker stop  ${PYTHON_AI_CONTAINER} || true
+                //   docker rm    ${PYTHON_AI_CONTAINER} || true
+                //   docker build --no-cache -f Dockerfile.python -t ${PYTHON_AI_IMAGE} .
+                //   docker run -d -p 8000:8000 --name ${PYTHON_AI_CONTAINER} \\
+                //     -v cricket_uploads:/tmp/uploads \\
+                //     -e PYTHONUNBUFFERED=1 --restart unless-stopped ${PYTHON_AI_IMAGE}
+                //   sleep 15
+                //   docker stop  ${CONTAINER_NAME} || true
+                //   docker rm    ${CONTAINER_NAME} || true
+                //   docker run -d -p ${HOST_PORT}:${CONTAINER_PORT} \\
                 //     --name ${CONTAINER_NAME} \\
-                //     --restart unless-stopped \\
-                //     ${DOCKER_IMAGE}
+                //     -e AI_SERVICE_URL=http://host.docker.internal:8000 \\
+                //     -e UPLOAD_DIR=/tmp/uploads \\
+                //     -v cricket_uploads:/tmp/uploads \\
+                //     --restart unless-stopped ${DOCKER_IMAGE}
                 // """
 
-                echo "✅  Container started: ${CONTAINER_NAME}"
-                echo "    Mapped: localhost:${HOST_PORT} → container:${CONTAINER_PORT}"
+                echo "✅  Both containers started:"
+                echo "    python-ai  → localhost:8000  (FastAPI / uvicorn)"
+                echo "    ${CONTAINER_NAME} → localhost:${HOST_PORT} (Spring Boot)"
+                echo "    Spring Boot → AI via host.docker.internal:8000"
             }
         }
 
