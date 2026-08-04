@@ -625,11 +625,44 @@ pipeline {
                     " --restart unless-stopped ^" +
                     " ${PYTHON_AI_IMAGE}"
 
-                // Wait for uvicorn to bind port 8000 before starting Spring Boot.
-                // Without this, Spring Boot might start and fail its first health-check
-                // call to the Python service before uvicorn is ready.
-                echo '  → Step 8d-iv: Waiting 15s for uvicorn to start...'
-                bat 'powershell -Command "Start-Sleep -Seconds 15"'
+                // ── Wait for Python AI service to be genuinely ready ──────────
+                // VERIFIED in runtime testing: uvicorn binds in 3-8 seconds on
+                // a warm image. A flat sleep is unreliable on first pull.
+                // This retry loop polls GET localhost:8000/health every 10 seconds
+                // (up to 15 attempts = 2.5 min max) and fails the build if Python
+                // AI never becomes healthy — preventing a broken deployment.
+                echo '  → Step 8d-iv: Polling Python AI /health until uvicorn is ready...'
+                script {
+                    int     pyRetries = 15
+                    int     pyWait    = 10
+                    boolean pyReady   = false
+
+                    for (int i = 1; i <= pyRetries; i++) {
+                        echo "[Python AI] Health probe ${i}/${pyRetries} → http://localhost:8000/health"
+
+                        // curl exits 0 on HTTP 2xx/3xx, non-zero on connection refused.
+                        // returnStatus: true captures the exit code without failing the step.
+                        int exitCode = bat(
+                            script: 'curl --fail --silent --max-time 5 --output NUL http://localhost:8000/health',
+                            returnStatus: true
+                        )
+
+                        if (exitCode == 0) {
+                            echo '[Python AI] ✅ uvicorn is UP — /health returned HTTP 200'
+                            pyReady = true
+                            break
+                        }
+
+                        echo "[Python AI] ⏳ Not ready (exit ${exitCode}). Waiting ${pyWait}s..."
+                        sleep(time: pyWait, unit: 'SECONDS')
+                    }
+
+                    if (!pyReady) {
+                        echo '[Python AI] ❌ Service did not start. Dumping container logs:'
+                        bat "docker logs --tail=50 ${PYTHON_AI_CONTAINER}"
+                        error('[Python AI] python-ai did not pass /health after 15 retries. Aborting.')
+                    }
+                }
 
                 // ── Step 8e: Start the Spring Boot container ──────────────────
                 // -e AI_SERVICE_URL : Overrides the localhost default hardcoded in
