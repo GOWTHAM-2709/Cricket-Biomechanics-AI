@@ -561,18 +561,25 @@ pipeline {
                 echo "            Port mapping : ${HOST_PORT}:${CONTAINER_PORT}"
                 echo '═══════════════════════════════════════════════════════'
 
-                // ── Step 8a: Stop & remove old container instances (Idempotent) ──
-                echo '  → Step 8a: Cleaning up previous containers (if running)...'
-                bat "docker stop ${CONTAINER_NAME} || echo No ${CONTAINER_NAME} to stop."
-                bat "docker rm   ${CONTAINER_NAME} || echo No ${CONTAINER_NAME} to remove."
-                bat "docker stop python-ai-verify || echo No python-ai-verify to stop."
-                bat "docker rm   python-ai-verify || echo No python-ai-verify to remove."
-                bat "docker stop ${PYTHON_AI_CONTAINER} || echo No ${PYTHON_AI_CONTAINER} to stop."
-                bat "docker rm   ${PYTHON_AI_CONTAINER} || echo No ${PYTHON_AI_CONTAINER} to remove."
+                // ── Step 8a: Safe, Fail-Proof Cleanup (Windows Compatible) ────────
+                // Using returnStatus: true in Groovy prevents non-zero exit codes from
+                // failing the Jenkins build during optional cleanup steps.
+                echo '  → Step 8a: Safely stopping & removing old containers...'
+                script {
+                    // Stop & remove containers (ignore errors if they do not exist)
+                    bat(script: "docker stop ${CONTAINER_NAME}", returnStatus: true)
+                    bat(script: "docker rm -f ${CONTAINER_NAME}", returnStatus: true)
+                    bat(script: "docker stop python-ai-verify", returnStatus: true)
+                    bat(script: "docker rm -f python-ai-verify", returnStatus: true)
+                    bat(script: "docker stop ${PYTHON_AI_CONTAINER}", returnStatus: true)
+                    bat(script: "docker rm -f ${PYTHON_AI_CONTAINER}", returnStatus: true)
 
-                // ── Step 8b: Prune dangling image layers ───────────────────────
-                echo '  → Step 8b: Pruning old dangling image layers...'
-                bat "docker image prune -f || echo No dangling images to prune."
+                    // Prune dangling images, unused networks, and unused volumes safely
+                    echo '  → Step 8b: Pruning dangling Docker resources...'
+                    bat(script: "docker image prune -f", returnStatus: true)
+                    bat(script: "docker network prune -f", returnStatus: true)
+                    bat(script: "docker volume prune -f", returnStatus: true)
+                }
 
                 // Build the Python AI image from Dockerfile.python.
                 // --no-cache ensures the latest main.py and analysis scripts are used.
