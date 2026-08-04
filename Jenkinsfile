@@ -602,8 +602,10 @@ pipeline {
                 //                   → [host machine port 8000]
                 //                         → [python-ai container : 8000]
                 //
-                // Stop + remove the old Python AI container (first run: no-op).
-                echo '  → Step 8d-i: Stopping old Python AI container (if running)...'
+                // Stop + remove old Python AI containers (including test containers)
+                echo '  → Step 8d-i: Stopping old Python AI containers (if running)...'
+                bat "docker stop python-ai-verify || echo No python-ai-verify to stop."
+                bat "docker rm   python-ai-verify || echo No python-ai-verify to remove."
                 bat "docker stop ${PYTHON_AI_CONTAINER} || echo No container named ${PYTHON_AI_CONTAINER} to stop."
                 bat "docker rm   ${PYTHON_AI_CONTAINER} || echo No container named ${PYTHON_AI_CONTAINER} to remove."
 
