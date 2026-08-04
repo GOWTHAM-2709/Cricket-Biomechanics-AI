@@ -561,53 +561,18 @@ pipeline {
                 echo "            Port mapping : ${HOST_PORT}:${CONTAINER_PORT}"
                 echo '═══════════════════════════════════════════════════════'
 
-                // ── Step 8a: Stop the running container ───────────────────────
-                // '|| echo' absorbs the error exit code when no container exists.
-                // Without this, the pipeline would FAIL on the very first run.
-                echo '  → Step 8a: Stopping existing container (if running)...'
-                bat "docker stop ${CONTAINER_NAME} || echo No container named ${CONTAINER_NAME} to stop."
-
-                // ── Step 8b: Remove the stopped container record ──────────────
-                // Must remove before 'docker run --name' can reuse the same name.
-                echo '  → Step 8b: Removing old container record (if present)...'
-                bat "docker rm ${CONTAINER_NAME} || echo No container named ${CONTAINER_NAME} to remove."
-
-                // ── Step 8c: Remove the old image to reclaim disk space ───────
-                // The new image already exists (built in Stage 5).
-                // '|| echo' absorbs error when image does not exist (first run).
-                echo '  → Step 8c: Pruning old dangling image layers...'
-                bat "docker image prune -f || echo No dangling images to prune."
-
-                // ── Step 8d: Start the Python AI service container ────────────
-                //
-                // ROOT CAUSE FIX — why the AI service was unreachable:
-                //   The Spring Boot container called http://localhost:8000/...
-                //   Inside a Docker container, 'localhost' refers to the container
-                //   itself — NOT the host machine and NOT other containers.
-                //   The Python AI service was never started by Jenkins, and even if
-                //   it were, localhost would still be the wrong address.
-                //
-                // SOLUTION — two parts:
-                //   1. Jenkins explicitly builds and starts the python-ai container.
-                //   2. The Spring Boot container receives AI_SERVICE_URL set to
-                //      http://host.docker.internal:8000 — a special DNS name that
-                //      Docker for Windows automatically resolves to the host machine
-                //      IP (gateway), allowing any container to reach any service
-                //      published on the host's port 8000.
-                //
-                // NETWORKING DIAGRAM:
-                //   [Browser] → localhost:8081
-                //       → [cricket-ai container : 8080]
-                //             → AI_SERVICE_URL = http://host.docker.internal:8000
-                //                   → [host machine port 8000]
-                //                         → [python-ai container : 8000]
-                //
-                // Stop + remove old Python AI containers (including test containers)
-                echo '  → Step 8d-i: Stopping old Python AI containers (if running)...'
+                // ── Step 8a: Stop & remove old container instances (Idempotent) ──
+                echo '  → Step 8a: Cleaning up previous containers (if running)...'
+                bat "docker stop ${CONTAINER_NAME} || echo No ${CONTAINER_NAME} to stop."
+                bat "docker rm   ${CONTAINER_NAME} || echo No ${CONTAINER_NAME} to remove."
                 bat "docker stop python-ai-verify || echo No python-ai-verify to stop."
                 bat "docker rm   python-ai-verify || echo No python-ai-verify to remove."
-                bat "docker stop ${PYTHON_AI_CONTAINER} || echo No container named ${PYTHON_AI_CONTAINER} to stop."
-                bat "docker rm   ${PYTHON_AI_CONTAINER} || echo No container named ${PYTHON_AI_CONTAINER} to remove."
+                bat "docker stop ${PYTHON_AI_CONTAINER} || echo No ${PYTHON_AI_CONTAINER} to stop."
+                bat "docker rm   ${PYTHON_AI_CONTAINER} || echo No ${PYTHON_AI_CONTAINER} to remove."
+
+                // ── Step 8b: Prune dangling image layers ───────────────────────
+                echo '  → Step 8b: Pruning old dangling image layers...'
+                bat "docker image prune -f || echo No dangling images to prune."
 
                 // Build the Python AI image from Dockerfile.python.
                 // --no-cache ensures the latest main.py and analysis scripts are used.
