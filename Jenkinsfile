@@ -2,26 +2,29 @@
 // ║        CRICKET BIOMECHANICS AI — JENKINS CI/CD PIPELINE                     ║
 // ║        Project  : Cricket AI Biomechanics & Speed Analyzer                  ║
 // ║        Stack    : Spring Boot 4 (Java 21) + FastAPI (Python) + Docker       ║
-// ║        Version  : 2.0  (Phase 2 — Full Local CI/CD with Docker Deploy)      ║
+// ║        Version  : 3.0  (Phase 3 — Docker Hub Push Integrated)               ║
 // ║                                                                              ║
 // ║  PIPELINE FLOW                                                               ║
 // ║  ─────────────────────────────────────────────────────────────────────────  ║
-// ║  Stage 1 : Checkout source from GitHub                                      ║
-// ║  Stage 2 : Verify Java 21 + Maven environment                               ║
-// ║  Stage 3 : Maven clean package (compile → JAR)                              ║
-// ║  Stage 4 : Run JUnit tests + publish report                                 ║
-// ║  Stage 5 : Build Docker image (--no-cache)                                  ║
-// ║  Stage 6 : Stop old container → remove → start new container                ║
-// ║  Stage 7 : HTTP health check (retry loop until app is ready)                ║
-// ║  Stage 8 : Archive JAR artefact with fingerprint                            ║
+// ║  Stage 1  : Checkout source from GitHub                                     ║
+// ║  Stage 2  : Verify Java 21 + Maven environment                              ║
+// ║  Stage 3  : Maven clean package (compile → JAR)                             ║
+// ║  Stage 4  : Run JUnit tests + publish report                                ║
+// ║  Stage 5  : Build Docker image (--no-cache)                                 ║
+// ║  Stage 6  : Docker Hub login (withCredentials — dockerhub-creds)            ║
+// ║  Stage 7  : Tag and push image to Docker Hub                                ║
+// ║  Stage 8  : Stop old container → remove → start new container               ║
+// ║  Stage 9  : HTTP health check (retry loop until app is ready)               ║
+// ║  Stage 10 : Archive JAR artefact with fingerprint                           ║
 // ║                                                                              ║
 // ║  PHASE ROADMAP                                                               ║
 // ║  ─────────────────────────────────────────────────────────────────────────  ║
 // ║  Phase 1 (done) : Checkout → Verify → Build → Test → Archive               ║
-// ║  Phase 2 (this) : + Docker build → Local container deploy → Health check    ║
-// ║  Phase 3 (next) : Push to DockerHub/ECR → Deploy on AWS EC2 via SSH         ║
-// ║  Phase 4 (next) : Kubernetes (EKS) rolling deployment                       ║
-// ║  Phase 5 (future): Blue-Green / canary / Slack notifications                ║
+// ║  Phase 2 (done) : + Docker build → Local container deploy → Health check    ║
+// ║  Phase 3 (this) : + Docker Hub login → Tag → Push to registry               ║
+// ║  Phase 4 (next) : Deploy on AWS EC2 via SSH using pushed image              ║
+// ║  Phase 5 (next) : Kubernetes (EKS) rolling deployment                       ║
+// ║  Phase 6 (future): Blue-Green / canary / Slack notifications                ║
 // ╚══════════════════════════════════════════════════════════════════════════════╝
 
 pipeline {
@@ -64,10 +67,16 @@ pipeline {
         MAVEN_OPTS     = '-Djava.awt.headless=true'
 
         // ── Docker configuration ──────────────────────────────────────────────
-        // All Docker-related constants live here so Stage 5/6/7 stay DRY.
+        // All Docker-related constants live here so Stages 5-10 stay DRY.
 
-        // The Docker image tag that gets built and deployed.
+        // The Docker image tag that gets built locally and deployed.
         DOCKER_IMAGE   = 'cricket-ai:latest'
+
+        // The fully-qualified Docker Hub image name used in Stage 6 and Stage 7.
+        // Format: <dockerhub-username>/<repository-name>:<tag>
+        // credentialsId 'dockerhub-creds' must be created in Jenkins → Manage
+        // Jenkins → Credentials before running the pipeline.
+        DOCKER_HUB_IMAGE = 'gowtham2709/cricket-biomechanics-ai:latest'
 
         // The container name used in stop / rm / run commands.
         CONTAINER_NAME = 'cricket-ai'
@@ -89,10 +98,7 @@ pipeline {
         // Seconds to wait between each health-check retry.
         HEALTH_WAIT_SECS = '6'
 
-        // ── Future variables (Phase 3 — DockerHub / ECR push) ─────────────────
-        // DOCKERHUB_CREDS  = credentials('dockerhub-creds')   // Jenkins secret
-        // DOCKERHUB_USER   = 'your-dockerhub-username'
-        // REMOTE_IMAGE     = "${DOCKERHUB_USER}/${APP_NAME}:${BUILD_NUMBER}"
+        // ── Future variables (Phase 4 — AWS EC2 SSH deploy) ───────────────────
         // EC2_HOST         = credentials('ec2-host')
         // EC2_USER         = 'ubuntu'
     }
@@ -327,7 +333,134 @@ pipeline {
         }
 
         // ══════════════════════════════════════════════════════════════════════
-        // STAGE 6 — DEPLOY DOCKER CONTAINER
+        // STAGE 6 — DOCKER HUB LOGIN
+        // ══════════════════════════════════════════════════════════════════════
+        // PURPOSE:
+        //   Authenticate the Jenkins agent with Docker Hub before Stage 7 can
+        //   push the image to the remote registry.
+        //
+        //   WHY withCredentials:
+        //     Storing credentials as plain-text environment variables exposes
+        //     them in the console log and in 'env' output from child processes.
+        //     withCredentials(usernamePassword(...)) binds the Jenkins secret to
+        //     %DOCKER_USER% and %DOCKER_PASS% ONLY for the duration of the inner
+        //     block. Jenkins automatically redacts these values in console output.
+        //
+        //   CREDENTIAL SETUP (one-time, in Jenkins UI):
+        //     Jenkins → Manage Jenkins → Credentials → (global) → Add Credential
+        //       Kind     : Username with password
+        //       Username : your-dockerhub-username
+        //       Password : your-dockerhub-access-token (NOT your account password)
+        //       ID       : dockerhub-creds              ← must match credentialsId below
+        //
+        //   WHY --password-stdin:
+        //     Passing the password via stdin avoids it appearing in the process
+        //     argument list (visible in Task Manager / ps aux on Linux), which
+        //     is a security best practice recommended by Docker and the CIS
+        //     Docker Benchmark.
+        //
+        //   NOTE: 'echo %DOCKER_PASS% | docker login' is the Windows-compatible
+        //   equivalent of 'echo $DOCKER_PASS | docker login' on Linux.
+        // ══════════════════════════════════════════════════════════════════════
+        stage('Stage 6 — Docker Hub Login') {
+            // Skip if an earlier stage failed — do not attempt to push from
+            // a broken build.
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                echo '═══════════════════════════════════════════════════════'
+                echo '  STAGE 6 : Logging in to Docker Hub'
+                echo "            Registry image : ${DOCKER_HUB_IMAGE}"
+                echo '═══════════════════════════════════════════════════════'
+
+                // withCredentials injects %DOCKER_USER% and %DOCKER_PASS% from
+                // the Jenkins secret identified by credentialsId = 'dockerhub-creds'.
+                // Both variables are automatically masked in the console log.
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    // Pipe the password into docker login via stdin.
+                    // This is the most secure method supported on Windows CMD.
+                    // WINDOWS bat:
+                    bat 'echo %DOCKER_PASS% | docker login -u %DOCKER_USER% --password-stdin'
+
+                    // LINUX EC2 equivalent:
+                    // sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                }
+
+                echo '✅  Docker Hub login successful.'
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // STAGE 7 — PUSH DOCKER IMAGE
+        // ══════════════════════════════════════════════════════════════════════
+        // PURPOSE:
+        //   Tag the locally-built image with its Docker Hub name and push it to
+        //   the remote registry so it is:
+        //     • Available to any machine that can reach Docker Hub.
+        //     • Permanently versioned in the registry for rollback.
+        //     • Ready to pull on AWS EC2 in Phase 4 without transferring the
+        //       image out-of-band.
+        //
+        //   WHY docker tag first:
+        //     docker build in Stage 5 produced 'cricket-ai:latest' — a local
+        //     short name. Docker Hub requires the full registry path:
+        //       <username>/<repository>:<tag>
+        //     docker tag creates a second name pointing to the SAME image layers;
+        //     no data is duplicated on disk.
+        //
+        //   WHY DOCKER_HUB_IMAGE from environment{}:
+        //     Using the env var instead of a hardcoded string means changing
+        //     the repository name or tag requires editing exactly one line
+        //     (the environment{} block) — not hunting through stage bodies.
+        //
+        //   FAILURE BEHAVIOUR:
+        //     If docker push fails (network error, auth expired, quota exceeded)
+        //     this stage exits non-zero and Jenkins marks the build FAILURE.
+        //     Stages 8-10 are guarded by when{} checks and will be skipped,
+        //     protecting the running container from being replaced by an image
+        //     that failed to push.
+        // ══════════════════════════════════════════════════════════════════════
+        stage('Stage 7 — Push Docker Image') {
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                echo '═══════════════════════════════════════════════════════'
+                echo "  STAGE 7 : Tagging  ${DOCKER_IMAGE} → ${DOCKER_HUB_IMAGE}"
+                echo "            Pushing  ${DOCKER_HUB_IMAGE}"
+                echo '═══════════════════════════════════════════════════════'
+
+                // ── Step 7a: Tag the local image with its Docker Hub name ──────
+                // This does NOT copy image data — it just adds a second name
+                // (alias) to the image that already exists in the local daemon.
+                echo '  → Step 7a: Tagging image for Docker Hub...'
+                bat "docker tag ${DOCKER_IMAGE} ${DOCKER_HUB_IMAGE}"
+
+                // LINUX EC2 equivalent:
+                // sh "docker tag ${DOCKER_IMAGE} ${DOCKER_HUB_IMAGE}"
+
+                // ── Step 7b: Push the tagged image to Docker Hub ──────────────
+                // Uploads only the layers that are not already present in the
+                // registry (layer de-duplication). Subsequent pushes of the same
+                // base layers are near-instant.
+                echo '  → Step 7b: Pushing image to Docker Hub...'
+                bat "docker push ${DOCKER_HUB_IMAGE}"
+
+                // LINUX EC2 equivalent:
+                // sh "docker push ${DOCKER_HUB_IMAGE}"
+
+                echo "✅  Image pushed to Docker Hub: ${DOCKER_HUB_IMAGE}"
+                echo "    View : https://hub.docker.com/r/gowtham2709/cricket-biomechanics-ai"
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // STAGE 8 — DEPLOY DOCKER CONTAINER
         // ══════════════════════════════════════════════════════════════════════
         // PURPOSE:
         //   Replace the currently running container with a fresh one from the
@@ -360,41 +493,41 @@ pipeline {
         //     If Docker Desktop restarts (e.g., after a Windows reboot) the
         //     container will automatically come back up without manual intervention.
         // ══════════════════════════════════════════════════════════════════════
-        stage('Stage 6 — Deploy Docker Container') {
+        stage('Stage 8 — Deploy Docker Container') {
             when {
                 expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
             }
             steps {
                 echo '═══════════════════════════════════════════════════════'
-                echo "  STAGE 6 : Deploying container → ${CONTAINER_NAME}"
+                echo "  STAGE 8 : Deploying container → ${CONTAINER_NAME}"
                 echo "            Image        : ${DOCKER_IMAGE}"
                 echo "            Port mapping : ${HOST_PORT}:${CONTAINER_PORT}"
                 echo '═══════════════════════════════════════════════════════'
 
-                // ── Step 6a: Stop the running container ───────────────────────
+                // ── Step 8a: Stop the running container ───────────────────────
                 // '|| echo' absorbs the error exit code when no container exists.
                 // Without this, the pipeline would FAIL on the very first run.
-                echo '  → Step 6a: Stopping existing container (if running)...'
+                echo '  → Step 8a: Stopping existing container (if running)...'
                 bat "docker stop ${CONTAINER_NAME} || echo No container named ${CONTAINER_NAME} to stop."
 
-                // ── Step 6b: Remove the stopped container record ──────────────
+                // ── Step 8b: Remove the stopped container record ──────────────
                 // Must remove before 'docker run --name' can reuse the same name.
-                echo '  → Step 6b: Removing old container record (if present)...'
+                echo '  → Step 8b: Removing old container record (if present)...'
                 bat "docker rm ${CONTAINER_NAME} || echo No container named ${CONTAINER_NAME} to remove."
 
-                // ── Step 6c: Remove the old image to reclaim disk space ───────
+                // ── Step 8c: Remove the old image to reclaim disk space ───────
                 // The new image already exists (built in Stage 5).
                 // '|| echo' absorbs error when image does not exist (first run).
-                echo '  → Step 6c: Pruning old dangling image layers...'
+                echo '  → Step 8c: Pruning old dangling image layers...'
                 bat "docker image prune -f || echo No dangling images to prune."
 
-                // ── Step 6d: Start the new container ─────────────────────────
+                // ── Step 8d: Start the new container ─────────────────────────
                 // -d                   : Detached — run in background.
                 // -p HOST:CONTAINER    : Port mapping.
                 // --name               : Named container for easy management.
                 // --restart unless-stopped : Auto-restart on Docker daemon restart.
                 // The caret (^) is the Windows CMD line-continuation character.
-                echo '  → Step 6d: Starting new container from latest image...'
+                echo '  → Step 8d: Starting new container from latest image...'
                 bat "docker run -d ^" +
                     " -p ${HOST_PORT}:${CONTAINER_PORT} ^" +
                     " --name ${CONTAINER_NAME} ^" +
@@ -419,7 +552,7 @@ pipeline {
         }
 
         // ══════════════════════════════════════════════════════════════════════
-        // STAGE 7 — HTTP HEALTH CHECK
+        // STAGE 9 — HTTP HEALTH CHECK
         // ══════════════════════════════════════════════════════════════════════
         // PURPOSE:
         //   The build should only be marked SUCCESS when the application is
@@ -463,13 +596,13 @@ pipeline {
         //     The outer pipeline timeout(45 MINUTES) prevents an infinite hang
         //     if something goes catastrophically wrong.
         // ══════════════════════════════════════════════════════════════════════
-        stage('Stage 7 — Health Check') {
+        stage('Stage 9 — Health Check') {
             when {
                 expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
             }
             steps {
                 echo '═══════════════════════════════════════════════════════'
-                echo "  STAGE 7 : Health check → ${HEALTH_URL}"
+                echo "  STAGE 9 : Health check → ${HEALTH_URL}"
                 echo "            Max retries : ${HEALTH_RETRIES}"
                 echo "            Wait between: ${HEALTH_WAIT_SECS}s"
                 echo '═══════════════════════════════════════════════════════'
@@ -534,7 +667,7 @@ pipeline {
 
 
         // ══════════════════════════════════════════════════════════════════════
-        // STAGE 8 — ARCHIVE JAR ARTEFACT
+        // STAGE 10 — ARCHIVE JAR ARTEFACT
         // ══════════════════════════════════════════════════════════════════════
         // PURPOSE:
         //   Save a permanent copy of the deployable JAR in Jenkins' own storage.
@@ -551,13 +684,13 @@ pipeline {
         //     Jenkins hashes the JAR (MD5) and records the hash in build metadata.
         //     Clickable in the Jenkins UI: "which builds used this exact file?"
         // ══════════════════════════════════════════════════════════════════════
-        stage('Stage 8 — Archive JAR Artefact') {
+        stage('Stage 10 — Archive JAR Artefact') {
             when {
                 expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
             }
             steps {
                 echo '═══════════════════════════════════════════════════════'
-                echo "  STAGE 8 : Archiving ${JAR_NAME}"
+                echo "  STAGE 10 : Archiving ${JAR_NAME}"
                 echo '═══════════════════════════════════════════════════════'
 
                 archiveArtifacts artifacts: "target/${JAR_NAME}",
@@ -648,7 +781,8 @@ pipeline {
             echo '║  ✅  PIPELINE COMPLETED SUCCESSFULLY                     ║'
             echo "║  App       : ${APP_NAME}                                 ║"
             echo "║  Build     : #${BUILD_NUMBER}                            ║"
-            echo "║  Image     : ${DOCKER_IMAGE}                             ║"
+            echo "║  Local img : ${DOCKER_IMAGE}                             ║"
+            echo "║  Hub image : ${DOCKER_HUB_IMAGE}                         ║"
             echo "║  Container : ${CONTAINER_NAME}                           ║"
             echo "║  Live URL  : ${HEALTH_URL}                               ║"
             echo '╚══════════════════════════════════════════════════════════╝'
