@@ -287,19 +287,37 @@ pipeline {
         // STAGE 5 — BUILD DOCKER IMAGE
         // ══════════════════════════════════════════════════════════════════════
         // PURPOSE:
-        //   Build a fresh Docker image from the Dockerfile in the project root.
+        //   Package the already-compiled JAR into a lightweight Docker runtime
+        //   image. This stage does NOT compile anything — that was Stage 3's job.
         //
-        //   WHY --no-cache:
-        //     Without --no-cache Docker reuses layer caches. If application.properties
-        //     or any resource file changed but pom.xml did not, Docker's cache
-        //     would serve the OLD layer and the new config would NOT be inside
-        //     the image. --no-cache guarantees the freshly compiled JAR is always
-        //     baked into the image. The trade-off is a longer build time.
+        //   ARCHITECTURE — why Maven no longer runs inside Docker:
+        //     Old approach (multi-stage Dockerfile):
+        //       docker build → RUN mvn dependency:go-offline  (~5 min, downloads ~300 MB)
+        //                    → RUN mvn clean package           (~3-8 min)
+        //       Total: 8-15 minutes. Maven ran TWICE per build (Stage 3 + inside Docker).
+        //       With --no-cache the layer cache never saved us anything.
+        //
+        //     New approach (runtime-only Dockerfile):
+        //       docker build → COPY target/*.jar app.jar       (< 1 second)
+        //       Total: < 30 seconds. Maven runs ONCE (Stage 3). Docker only packages.
+        //
+        //   WHY this is the industry standard:
+        //     The Jenkins pipeline is the CI system. Its job is to compile, test,
+        //     and produce a verified artifact (the JAR). Docker's job is to package
+        //     and ship that artifact — not to build it again.
+        //     The JAR inside the image is the EXACT artifact Jenkins tested in Stage 4.
+        //     This guarantees "what we tested is what we ship."
+        //
+        //   WHY --no-cache is still used:
+        //     --no-cache ensures the COPY target/*.jar instruction always picks up
+        //     the freshly compiled JAR from Stage 3 rather than a stale cached layer.
+        //     With a pure COPY, --no-cache is nearly instant (< 1 s) because there
+        //     is no download or compilation — just a file copy.
         //
         //   WHY tagged 'cricket-ai:latest':
-        //     Stage 6 references this exact tag when starting the container.
-        //     'latest' is fine for local CI — in Phase 3 we'll add a versioned
-        //     tag (cricket-ai:${BUILD_NUMBER}) for immutable DockerHub pushes.
+        //     Stage 8 references this exact tag when starting the container.
+        //     Stage 6 (Docker Hub login) and Stage 7 (push) also use DOCKER_IMAGE
+        //     as the local source tag before pushing DOCKER_HUB_IMAGE.
         //
         //   The stage fails immediately if 'docker build' exits non-zero.
         //   There is no risk of deploying a broken image.
@@ -313,11 +331,13 @@ pipeline {
             steps {
                 echo '═══════════════════════════════════════════════════════'
                 echo "  STAGE 5 : Building Docker image → ${DOCKER_IMAGE}"
+                echo '          (packaging pre-built JAR — no Maven inside Docker)'
                 echo '═══════════════════════════════════════════════════════'
 
-                // --no-cache  : Never reuse layer cache — always bake the latest JAR.
+                // --no-cache  : Always picks up the freshly compiled JAR from target/.
+                //               With a pure COPY Dockerfile this takes < 1 second.
                 // -t          : Tag the image with the name defined in environment{}.
-                // .           : Build context is the project root (where Dockerfile lives).
+                // .           : Build context is the project root (Dockerfile + target/).
                 //
                 // WINDOWS bat:
                 bat "docker build --no-cache -t ${DOCKER_IMAGE} ."
@@ -329,6 +349,7 @@ pipeline {
                 bat "docker image inspect ${DOCKER_IMAGE} > nul 2>&1 && echo ✅ Image verified: ${DOCKER_IMAGE} || (echo ❌ Image not found after build && exit /b 1)"
 
                 echo "✅  Docker image built and verified: ${DOCKER_IMAGE}"
+                echo "    Build time target: < 30 seconds (COPY only — no Maven)"
             }
         }
 
